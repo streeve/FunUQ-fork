@@ -1,0 +1,27 @@
+units metal
+atom_style atomic
+boundary p p p
+
+lattice fcc 3.5
+region         box2 block 0 6 0 6 0 6
+create_box 1   box2
+create_atoms   1 box
+
+mass * 63.55
+
+pair_style table linear 8000
+pair_coeff * * morse.table morse_1 6.0
+
+timestep       0.001
+
+velocity all create 300 3512949 rot yes dist gaussian
+
+# dump           1 all custom  1000 funcder_1.dump id type x y z vx vy vz
+thermo_style   custom step cpu etotal pe ke temp vol press pxx pyy pzz pxy pxz pyz lx ly lz xy xz yz
+thermo_modify  flush yes
+thermo         1000
+
+fix 1 all npt temp 1500 1500 0.1 iso 1 1 1.0
+run 100000
+
+write_data	init.data

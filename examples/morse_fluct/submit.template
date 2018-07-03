@@ -1,0 +1,13 @@
+#!/bin/sh
+#PBS -l walltime=3:58:00
+#PBS -l nodes=1:ppn=1
+#PBS -l naccesspolicy=shared
+#PBS -N NAME
+#PBS -q standby
+
+set echo
+module load lammps
+cd $PBS_O_WORKDIR
+
+#mpiexec -n 16 lmp < INFILE
+lmp < INFILE
