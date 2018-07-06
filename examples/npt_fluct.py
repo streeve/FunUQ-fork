@@ -3,7 +3,7 @@
 ### v0.4; Sam Reeve
 
 #from funuq import *
-from FunUQ_MD import *
+from FunUQ import *
 
 
 # Run new simulations? 
@@ -46,7 +46,7 @@ if run or run_verify:
 QoI.extract_lammps()
 QoI_correct.extract_lammps()
 
-print QoI.Qavg, QoI_correct.Qavg
+print(QoI.Qavg, QoI_correct.Qavg)
 
 FD_dict = {'alist': [-1e-12, -2e-12, 1e-12, 2e-12],
 #'rN': 60

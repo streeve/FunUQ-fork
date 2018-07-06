@@ -2,18 +2,21 @@
 ### FunUQ run file ###
 ### v0.4; Sam Reeve
 
+import numpy as np
+
 #from funuq import *
-from FunUQ_MD import *
+from FunUQ import *
 
 
 # Run new simulations? 
 run = False
 run_verify = False
+run_bruteforce = False
 run_perturb = False
 ################################################################### Scale QoI values?
 
 # Main inputs
-startdir = 'morse_fluct_shifted/'
+startdir = 'morse_fluct/'
 rundir = '/scratch/halstead/s/sreeve/funuq/morse_liquid/'
 
 # Define potentials
@@ -44,9 +47,9 @@ if run or run_verify:
 
 QoI.extract_lammps()
 QoI_correct.extract_lammps()
-print QoI.Qavg, QoI_correct.Qavg
+print(QoI.Qavg, QoI_correct.Qavg)
 
-FD_dict = {'alist': [-1e-8, -2e-8, 1e-8, 2e-8],
+FD_dict = {'alist': [-2e-8, -1e-8, 1e-8, 2e-8],
            #'rlist': np.linspace(0.0998333333333333, 6.09983333333333334, 30)
 
            #'rmin': 1.5,
@@ -57,11 +60,11 @@ FD_dict = {'alist': [-1e-8, -2e-8, 1e-8, 2e-8],
 #FuncDer = FuncDer_perturb_allatom(QoI, Pot_main,
 #                                   input_dict=FD_dict)
 FuncDer = FuncDer_perturb_coord(QoI, Pot_main,
-                                 input_dict=FD_dict)
+                                input_dict=FD_dict)
 
 
 ### Calculate functional derivative
-if run and FuncDer.method == 'bruteforce':
+if run_bruteforce and FuncDer.method == 'bruteforce':
     FuncDer.run_lammps()
     exit() 
 
@@ -73,7 +76,7 @@ FuncDer.prepare_FD()
 FuncDer.calc_FD()
 for x in range(len(QoI_list)):
     FuncDer.write_FD(x)
-    FuncDer.plot_FD(x)
+FuncDer.plot_FD(2)
 
 
 ### Calculate correction
@@ -85,8 +88,9 @@ Correct = FunUQ(Pot_main, Pot_correct, QoI.Q_names, QoI.Qavg, QoI_correct.Qavg, 
 #Correct.read_FD(QoI.resultsdir, FuncDer.FDnames)
 
 Correct.discrepancy()
-Correct.plot_discrep() 
+#Correct.plot_discrep() 
 
 # Get corrections for properties
 Correct.correct()
-#Correct.plot_correct()
+for x in range(len(QoI_list)):
+    Correct.plot_funcerr(x)
