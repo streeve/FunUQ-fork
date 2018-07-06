@@ -3,9 +3,9 @@
 import sys, os, re, numpy as np
 from operator import methodcaller
 
+from .utils import FUQerror
 
 
-###############################################################################
 def read_thermo(f, ignore_equil=False, only_last=True, last_half=False, 
                 returnval='most'):
     '''
@@ -23,8 +23,6 @@ def read_thermo(f, ignore_equil=False, only_last=True, last_half=False,
     equil_flag = 0
     head_list = []; tail_list = []
     for lc, line in enumerate(loglines):
-#        if 'reset_timestep' in line: equil_flag = 1
-
         if 'TotEng' in line: # and equil_flag:
             head_list.append(lc + 1)
             col_log = line.split() # columns should always be same length
@@ -32,7 +30,7 @@ def read_thermo(f, ignore_equil=False, only_last=True, last_half=False,
             tail_list.append(lc)
             Natoms = int(line.split()[-2]) # number of atoms should stay the same
 
-        ### If the simulation isn't done, need to find the atom count somewhere else
+        # If the simulation isn't done, need to find the atom count somewhere else
         elif 'Created ' in line and 'atoms' in line:
             Natoms = int(line.split()[1])
         elif 'atoms' in line and 'new total' in line:
@@ -41,8 +39,7 @@ def read_thermo(f, ignore_equil=False, only_last=True, last_half=False,
             Natoms = int(loglines[lc+1].split()[0])
 
     if not head_list:
-        print "ERROR: No thermo data"
-        return
+        raise FUQerror("No thermo data (read_thermo)")
 
     Nhead = len(head_list)
     Ntail = len(tail_list)
@@ -50,8 +47,8 @@ def read_thermo(f, ignore_equil=False, only_last=True, last_half=False,
         if Nhead == Ntail + 1:
             tail_list.append(Nlog)
         else:
-            print "ERROR: Parsing"
-            return
+            raise FUQerror("Parsing error (read_thermo)")
+
     diff_list = np.array(tail_list, dtype='int32') - np.array(head_list, dtype='int32')
 
     istart = 0
@@ -73,13 +70,13 @@ def read_thermo(f, ignore_equil=False, only_last=True, last_half=False,
     for lc, head, tail in zip(range(Nhead), head_list, tail_list):
         headarr.append(tailarr[-1])
         tailarr.append(headarr[-1] + tail_list[lc] - head_list[lc])
-        thermo_tmp = map(methodcaller('split'), loglines[head:tail])
-        ### Mapping from list to array doesn't work if all sublists are not the same length
-        if len(thermo_tmp[-1]) < Ncol:
+        thermo_tmp = list(map(methodcaller('split'), loglines[head:tail]))
+        # Mapping from list to array doesn't work if all sublists are not the same length
+        if len(list(thermo_tmp)[-1]) < Ncol:
             thermo_tmp = thermo_tmp[:-1]
             thermo = np.delete(thermo, (-1), axis=0)
 
-        thermo[headarr[-1]:tailarr[-1], :] = np.array([map(float, x) for x in thermo_tmp])
+        thermo[headarr[-1]:tailarr[-1], :] = np.array([[float(x2) for x2 in x1] for x1 in thermo_tmp])
 
     if returnval == 'everything':
         return col_log, thermo, Natoms, headarr, tailarr[1:] 
@@ -89,8 +86,6 @@ def read_thermo(f, ignore_equil=False, only_last=True, last_half=False,
         return thermo
 
 
-
-###############################################################################
 def find_columns(allcol, findcol):
     '''
     Find columns from LAMMPS log 
@@ -105,8 +100,6 @@ def find_columns(allcol, findcol):
     return col_ind
 
 
-
-###############################################################################
 def block_avg(arr, samples, axis=1):
     '''
     Local separate averaging
@@ -122,16 +115,6 @@ def block_avg(arr, samples, axis=1):
     return newarr
 
 
-
-###############################################################################
-### Local running averaging
-#    By default, ignores trailing information that doesn't fit block size
-#def running_avg(arr, samples, axis=1):
-
-
-
-
-###############################################################################
 def read_data(f, vel=False, head=False, box=False):
     '''
     LAMMPS DATA PARSING
@@ -159,16 +142,15 @@ def read_data(f, vel=False, head=False, box=False):
         elif "xy xz yz" in line:
             tiltbox = float(line.split()[0])
 
-    ### No velocities
+    # No velocities
     if not tail:
         tail.append(len(datatxt))
     if len(tail) < len(head):
         tail.append(len(datatxt))
 
-    ### No data
+    # No data
     if not head:
-        print "ERROR: No data"
-        return
+        raise FUQerror("No data (read_thermo)")
 
     data_tmp = map(methodcaller('split'), datatxt[head[0]:tail[0]])
     dataA = np.array([map(float, x) for x in data_tmp])
@@ -193,9 +175,7 @@ def read_data(f, vel=False, head=False, box=False):
         return dataA
 
 
-
-###############################################################################
-### UNTESTED
+# TODO testing
 def read_dump(f, style='NxNxN'):
     ''' 
     LAMMPS DUMP PARSING
@@ -219,7 +199,7 @@ def read_dump(f, style='NxNxN'):
     if style == 'NxNxN':
         atoms = np.zeros([Natoms, Ncol, Nsteps])
     elif style == '6xN':
-        atoms = np.zeros([Natoms*Nsteps, 6]) ####### Need to automate (keep x y z vx vy vz)
+        atoms = np.zeros([Natoms*Nsteps, 6])
     elif style == '6N':
         atoms = np.zeros([Nsteps,Natoms*len(col_dump)])
 
@@ -234,63 +214,14 @@ def read_dump(f, style='NxNxN'):
         if style == 'NxNxN':
             atoms[:,:,a] = np.array(atoms_tmp)
         elif style == '6xN':
-            atoms[Natoms*a:Natoms*a+Natoms,:] = np.array(atoms_tmp[:,1:]) ###### Need to automate (skips atom ids, etc.)
+            # Need to automate (skips atom ids, etc.)
+            atoms[Natoms*a:Natoms*a+Natoms,:] = np.array(atoms_tmp[:,1:]) 
         elif style == '6N':
             atoms[:,a*Ncol:a*Ncol+Ncol] = np.array(atoms_tmp)
 
     return col_dump, Natoms, atoms
 
 
-'''
-# Creates 6xN array
-# read_dump1(f, dumpfreq):
-    # Extract per atom info - all into one array e.g.
-    # x1 y1 z1 vx1 vy1 vz1
-    # x2 y2 z2 vx2 vy2 vz2 
-    # ...
-    atoms = np.zeros([Natoms*Nsteps, 6]) ####### Need to automate (keep x y z vx vy vz)
-    dumparr = np.array(dumptxt, dtype=object)
-    for a in range(Nsteps):
-        atomlines = [9+(9+Natoms)*a, 9+(9+Natoms)*a+Natoms]
-        atoms_tmp = list(dumparr[atomlines[0]:atomlines[1]])
-        atoms_tmp = map(methodcaller('split'), atoms_tmp)
-        atoms_tmp = [map(float, x) for x in atoms_tmp]
-        atoms_tmp = np.array(atoms_tmp)
-        atoms[Natoms*a:Natoms*a+Natoms,:] = np.array(atoms_tmp[:,1:]) ###### Need to automate (skips atom ids, keeps x y z vx vy vz)
-
-    return col_dump, Natoms, atoms
-
-###############################################################################
-# Creates one 6N column vector (used with Bilionis group)
-# read_dump2(f, dumpfreq):
-    with open(f, 'r') as f_dump:
-        dumptxt = f_dump.readlines()
-    # Find total lines, atoms, steps, and variable names in dump file
-    # TODO: could also read box for each step
-    Ntxt = int(len(dumptxt))
-    Natoms = int(dumptxt[3]) # always line 3
-    Nsteps = int(dumptxt[-Natoms-8])/dumpfreq # always N+8 from bottom
-    col_dump = dumptxt[8].split()[2:] # always line 8
-    Ncol = len(col_dump)
-
-    # Extract per atom info - all into one array e.g.
-    # x1 y1 z1 vx1 vy1 vz1 x2 y2 z2 vx2 vy2 vz2 ...
-    atoms = np.zeros([Nsteps,Natoms*len(col_dump)])
-    dumparr = np.array(dumptxt, dtype=object)
-    for a in range(Natoms):
-        atomlines = range(9+a, Ntxt-Natoms+a, 9+Natoms)
-        atoms_tmp = list(dumparr[atomlines])
-        atoms_tmp = map(methodcaller('split'), atoms_tmp)
-        atoms_tmp = [map(float, x) for x in atoms_tmp]
-        atoms_tmp = np.array(atoms_tmp)
-        atoms[:,a*Ncol:a*Ncol+Ncol] = np.array(atoms_tmp)
-
-
-    return col_dump, Natoms, atoms
-'''
-
-
-###############################################################################
 def sort_files(filelist, glob1='.dump', n1=0, glob2='.', n2=-1, reverse=False, zero_first=True):
     '''
     SORTED FILE GLOB
@@ -322,8 +253,6 @@ def sort_files(filelist, glob1='.dump', n1=0, glob2='.', n2=-1, reverse=False, z
     return filenum, filelist
 
 
-
-###############################################################################
 def write_file0(arr, fname, transpose=False, typ='w'):
     '''
     Write numpy array to file
@@ -339,12 +268,9 @@ def write_file0(arr, fname, transpose=False, typ='w'):
         else: 
             np.savetxt(f, arr)
 
-
     return 
 
 
-
-###############################################################################
 def write_file1(list0, fname, typ='w'):
     '''
     Write list to file
@@ -357,3 +283,4 @@ def write_file1(list0, fname, typ='w'):
         f.write(txt)
 
     return 
+
