@@ -6,12 +6,12 @@ import os, numpy as np
 from glob import glob
 from random import random
 from operator import methodcaller
+from copy import deepcopy
 from matplotlib import pyplot as plt
 
 from .qoi import fluctuation
-from .potential import create_table
 from .parsetools import read_thermo
-from .utils import copy_files, read_template, replace_template, submit_lammps
+from .utils import copy_files, write_file, read_template, replace_template, submit_lammps
 
 class FuncDer(object): 
     '''
@@ -28,16 +28,8 @@ class FuncDer(object):
         self.pot = potential 
         self.ensemble = ensemble
 
-        '''
-        if self.ensemble == 'nvt' and 'Volume' in self.QoI.Q_names:
-            self.QoI.Q_names.remove('Volume')
-            print("Cannot predict volume with constant volume")
-        if self.ensemble == 'npt' and 'Press' in self.QoI.Q_names:
-            self.QoI.Q_names.remove('Press')
-            print("Cannot predict pressure with constant pressure")
-        '''
         # Debugging
-        self.showA = True
+        self.showA = False
 
         # Perturbations
         self.rdfbins = 2000
@@ -50,10 +42,6 @@ class FuncDer(object):
         #self.alist = [-0.000375, -0.00075, 0.00075, 0.000375]
         self.clist = [0.1]
 
-        self.newshape = (self.QoI.Ntimes*self.QoI.Ncopies, len(self.rlist), len(self.alist),
-                         len(self.clist), len(self.QoI.Q_names))
-        self.Qprime = np.zeros([self.QoI.Ntimes, self.QoI.Ncopies, len(self.rlist), len(self.alist),
-                         len(self.clist), len(self.QoI.Q_names)])
         self.method = 'none'
         self.FDnames = []
 
@@ -64,6 +52,11 @@ class FuncDer(object):
                     setattr(self, key, val)
                 except:
                     raise KeyError("{} is not a valid input parameter.".format(key))
+
+        self.newshape = (self.QoI.Ntimes*self.QoI.Ncopies, len(self.rlist), len(self.alist),
+                         len(self.clist), len(self.QoI.Q_names))
+        self.Qprime = np.zeros([self.QoI.Ntimes, self.QoI.Ncopies, len(self.rlist), len(self.alist),
+                         len(self.clist), len(self.QoI.Q_names)])
 
 
     def get_names(self):
@@ -141,7 +134,7 @@ class FuncDer(object):
                     self.funcder[r0c, qc] = m[0]
 
 
-                    if self.showA  and 'HeatCapacity' in q:
+                    if self.showA and 'HeatCapacity' in q:
                         print(m[0], r0, np.max(self.Qperturbed[r0c, :, c0c, qc]) - np.min(self.Qperturbed[r0c, :, c0c, qc])) #, self.alist)
                         plt.xlim([np.min(self.alist), np.max(self.alist)])
                         plt.ylim([np.min(self.Qperturbed[r0c, :, c0c, qc]), np.max(self.Qperturbed[r0c, :, c0c, qc])])
@@ -152,7 +145,7 @@ class FuncDer(object):
 
             self.funcder[:,qc] = self.funcder[:,qc]*self.QoI.conversions[qc]
 
-        print("Calculated functional derivative")
+        print("Calculated functional derivatives\n")
 
 
 
@@ -195,9 +188,7 @@ class FuncDer_bruteforce(FuncDer):
 
                     out = '{}_{}_{}_{}'.format(self.pot.potname, r0, a0, c0)
                     potfile = '{}.table'.format(out)
-                    R, PE, style, coeff = create_table(self.pot.potname, self.pot.parampath,
-                                                       #self.pot, self.parampath,
-                                                       r0=r0, a0=a0, c0=c0, 
+                    R, PE, style, coeff = self.pot.create_table(r0=r0, a0=a0, c0=c0, 
                                                        outname=potfile, savedir=adir)
                     
                     # This is to fix data path IF ../ is there (as it should be for multiple copies
@@ -219,14 +210,14 @@ class FuncDer_bruteforce(FuncDer):
 
     # Replace with call to extrct_lmp
     def extract_lammps(self):
-        Qperturbed = np.zeros([self.QoI.Ntimes, self.QoI.Ncopies, len(self.rlist),                                                                
+        Qperturbed = np.zeros([self.QoI.Ntimes, self.QoI.Ncopies, len(self.rlist),
                                len(self.alist), len(self.clist), len(self.QoI.Q_names)])
         first = True
         for c0c, c0 in enumerate(self.clist):
             for r0c, r0 in enumerate(self.rlist):
                 for a0c, a0 in enumerate(self.alist):
                     for copy0, copy in enumerate(range(self.QoI.copy_start, self.QoI.copy_start + self.QoI.Ncopies)):
-                        #rdir = 'r{:.4f}'.format(r0)[:-2]
+
                         logfile = glob(os.path.join(self.rundir,
                                                     'c{}'.format(c0), 'r{:.2f}*'.format(r0), 'a{}'.format(a0),
                                                     self.QoI.copy_folder+str(copy), self.QoI.logfile))[0]
@@ -260,7 +251,7 @@ class FuncDer_bruteforce(FuncDer):
                             elif qn == 'ThermalExpansion':
                                 Qperturbed[:, copy0, r0c, a0c, c0c, qc] = thermo[:,self.QoI.Q_cols[self.QoI.Vcol]]**2
 
-                print("Extracted thermo data for position {}".format(r0))
+                print("Extracted thermodynamic data for position {}".format(r0))
 
         self.Qperturbed = np.mean(Qperturbed, axis=(0,1))
 
@@ -270,27 +261,7 @@ class FuncDer_bruteforce(FuncDer):
                 #self.Qperturbed[ = np.mean(Qperturbed, axis=(0,1))
 
             if not self.QoI.Q_thermo[qc]:
-                print(self.QoI.Q_names[qc])
                 self.funcder_fluct(q, qc)
-            '''
-            if q == 'HeatCapacityVol':
-                #Q = self.Qperturbed[:,:,0,0,0,self.PEcol]
-                #Q2 = self.Q[:,:,0,0,0,qc] # already squared                                                                                   
-                self.Qperturbed[:,:,:,qc] = fluctuation(self.QoI.beta/self.QoI.T, self.Qperturbed[:,:,:,qc],
-                                                        self.Qperturbed[:,:,:,self.QoI.PEcol])
-                #self.QoI.beta/(self.QoI.T)*(self.Qperturbed[:,:,:,qc] - self.Qperturbed[:,:,:,self.QoI.PEcol]**2)
-            elif q == 'HeatCapacityPress':
-                self.Qperturbed[:,:,:,qc] = fluctuation(self.QoI.beta/self.QoI.T, self.Qperturbed[:,:,:,qc],
-                                                        self.Qperturbed[:,:,:,self.QoI.PEcol]+
-                                                        self.Qperturbed[:,:,:,self.QoI.Pcol]*self.Qperturbed[:,:,:,self.QoI.Vcol])
-            elif q == 'Compressibility':
-                self.Qperturbed[:,:,:,qc] = fluctuation(self.beta/self.V, self.Qperturbed[:,:,:,qc], 
-                                                        self.Qperturbed[:,:,:,self.QoI.Vcol])
-            elif q == 'ThermalExpansion':
-                self.Qperturbed[:,:,:,qc] = fluctuation(self.beta/self.V, self.Qperturbed[:,:,:,qc],
-                                                        self.Qperturbed[:,:,:,self.QoI.PEcol]+
-                                                        self.Qperturbed[:,:,:,self.QoI.Pcol]*self.Qperturbed[:,:,:,self.QoI.Vcol])
-            '''
             
             
     def prepare_FD(self):
@@ -312,13 +283,10 @@ class FuncDer_perturbative(FuncDer):
 
 
     def exp_weighting(self):
-        #newshape = (self.Ntimes*self.Ncopies, len(self.rlist), len(self.alist), len(self.clist))
-
         # Get Q for weighting 
         Hprime = self.Qprime[:,:,:,:,:,self.QoI.PEcol]
-        #tmp = Hprime.reshape(newshape)
-        #Hprime_avg = np.mean(tmp, axis=0)
         Hprime_avg = np.mean(Hprime, axis=(0,1))
+        #Qprime_avg = np.mean(self.Qprime, axis=(0,1))
         if self.ensemble == 'npt':
             Vprime = self.Qprime[:,:,:,:,:,self.QoI.Vcol]
             Vprime_avg = np.mean(Vprime, axis=(0,1))
@@ -328,6 +296,8 @@ class FuncDer_perturbative(FuncDer):
         # Add unperturbed QoI 
         Qprime = self.Qprime + self.QoI.Q # eV**2 + eV**2
 
+        #print(np.shape(Hprime_avg))
+        #print(Hprime_avg[0,0,0], self.QoI.beta*(Hprime-Hprime_avg)[0,0,0])
         # Average the exponential
         if self.ensemble == 'nvt':
             expweights = np.exp(-self.QoI.beta*(Hprime-Hprime_avg))
@@ -335,30 +305,24 @@ class FuncDer_perturbative(FuncDer):
             expweights = np.exp(-self.QoI.beta*((Hprime-Hprime_avg) + 
                                                 (Vprime-Vprime_avg)*(Pprime-Pprime_avg)))
 
-        #tmp = expweights.reshape(newshape)
-        #denominator = np.mean(tmp, axis=0)
         denominator = np.mean(expweights, axis=(0,1))
 
         # Average the QoI*exponential product
         self.Qperturbed = np.zeros([len(self.rlist), len(self.alist), len(self.clist), len(self.QoI.Q_names)])
         for qc, (q,thermoq) in enumerate(zip(self.QoI.Q_names, self.QoI.Q_thermo)):
-            numerator = expweights*Qprime[:,:,:,:,:,qc]
+            #Qprime = self.Qprime[:,:,:,:,:,qc]
+            #Qprime_avg = np.mean(Qprime, axis=(0,1,2,3,4))
 
-            #tmp = numerator.reshape(newshape)
-            #numerator = np.mean(tmp, axis=0)
+            #print(np.mean(self.Qprime[:,:,:,:,:,qc]), np.mean(self.QoI.Q[:,:,:,:,:,qc]))
+            numerator = expweights*(Qprime[:,:,:,:,:,qc])
+            #numerator = expweights*(Qprime-Qprime_avg)
+
             numerator = np.mean(numerator, axis=(0,1))
             self.Qperturbed[:,:,:,qc] = numerator/denominator
 
+        for qc, q in enumerate(self.QoI.Q_names):
             if not thermoq:
-                print(q, thermoq)
                 self.funcder_fluct(q, qc)
-
-            #if q == 'HeatCapacityVol':
-                #self.QoI.beta/(self.QoI.T)*(self.Qperturbed[:,:,:,self.QoI.PEcol]**2 - self.Qperturbed[:,:,:,qc])
-
-
-        #for qc, q in enumerate(self.QoI.Q_names):
-        #    self.Qperturbed[:,:,:,qc] = self.Qperturbed[:,:,:,qc]*self.QoI.conversions[qc]
 
 
 
@@ -374,16 +338,14 @@ class FuncDer_perturb_allatom(FuncDer_perturbative):
 
         self.reruntemplate = 'rerun.template'
         #self.rerunfile = 'in.rerun_gauss'
-        self.rerunpath = os.path.join(self.initdir, self.reruntemplate)
+        self.rerunpath = os.path.join(self.QoI.initdir, self.reruntemplate)
         self.reruntxt = read_template(self.rerunpath)
 
-        self.rerunpotdir = os.path.join(self.rundir, 'gauss')
+        self.rerunpotdir = os.path.join(self.QoI.rundir, 'gauss')
 
         self.rerunsubtemplate = 'submit_rerun.template'
-        self.rerunsubpath = os.path.join(self.initdir, self.rerunsubtemplate)
+        self.rerunsubpath = os.path.join(self.QoI.initdir, self.rerunsubtemplate)
         self.rerunsubtxt = read_template(self.rerunsubpath)
-
-        #super(FuncDer_perturb_allatom, self).__init__(*args, **kwargs)
 
 
     def rerun_gauss(self):
@@ -406,7 +368,7 @@ class FuncDer_perturb_allatom(FuncDer_perturbative):
                         inname = 'in.{}'.format(out)
                         if not copy0:
                             potname = '{}.table'.format(out)
-                            R, PE, style, coeff = create_table('gauss', '', r0=r0, a0=a0, c0=c0, 
+                            R, PE, style, coeff = self.pot.create_table('gauss', '', r0=r0, a0=a0, c0=c0, 
                                                                outname=potname,
                                                                savedir=self.rerunpotdir)
                         replace = {'LOGNAME': outname,
@@ -417,7 +379,7 @@ class FuncDer_perturb_allatom(FuncDer_perturbative):
 
             replace_sub = {'NAME': 'gauss'}
             subtxt = replace_template(self.rerunsubtxt, replace_sub)
-            submit_lammps(self.subfile, subtxt,
+            submit_lammps(self.QoI.subfile, subtxt,
                           'tmp', '', rerundir)
 
 
@@ -432,16 +394,14 @@ class FuncDer_perturb_allatom(FuncDer_perturbative):
                         logfile = os.path.join(self.QoI.rundir, self.QoI.copy_folder+str(copy),
                                                'rerun_gauss/', 'gauss_{}_{}_{}.log'.format(r0, a0, c0))
                         cols, thermo, Natoms = read_thermo(logfile)
+
                         for qc, q in enumerate(self.QoI.Q_cols):
-                            self.Qprime[:, copy0, r0c, a0c, c0c, qc] = thermo[:,q]
+                            if self.QoI.Q_thermo[qc]:
+                                self.Qprime[:, copy0, r0c, a0c, c0c, qc] = thermo[:,q]
 
-                print("Extracted thermo data for perturbation position {}".format(r0))
-
+                print("Extracted thermodynamic data for perturbation position {}".format(r0))
 
     def prepare_FD(self):
-        #self.extract_lammps(self.mainpot)
-        #print("Extracted thermo data")
-
         self.extract_lammps_gauss()
         print("Extracted perturbation data")
 
@@ -518,8 +478,8 @@ class FuncDer_perturb_coord(FuncDer_perturbative):
                             #gauss, gaussdiff = self.get_perturb(r0, a0, c0)
                             
                             for qc, q in enumerate(self.QoI.Q_names):
-
-                                if q == 'PotEng':
+                                
+                                if q == 'PotEng' or q == 'E_vdwl':
                                     #self.Qprime[tc,copy,r0c,a0c,c0c,qc] = np.sum(self.gauss[r0c,a0c,c0c, :]*
                                     #                                             self.coord[tc, copy, :])
                                     self.Qprime[tc,copy0,r0c,a0c,c0c,qc] = np.sum(self.gauss[r0c,a0c,c0c, :]*coord[tc,:])
@@ -529,7 +489,7 @@ class FuncDer_perturb_coord(FuncDer_perturbative):
                                     self.Qprime[tc,copy0,r0c,a0c,c0c,qc] = np.sum(self.gaussdiff[r0c,a0c,c0c, :]*coord[tc,:]*self.rdf_R[:-1])
 
         for qc, q in enumerate(self.QoI.Q_names):
-            if q == 'PotEng':
+            if q == 'PotEng' or q == 'E_vdwl':
                 #self.Qprime[:,:,:,:,:,qc] = np.sum(self.gauss*
                 #                                   self.coord, axis=-1)
                 self.Qprime[:,:,:,:,:,qc] = self.Qprime[:,:,:,:,:,qc]*self.QoI.Natoms/2.
@@ -538,7 +498,7 @@ class FuncDer_perturb_coord(FuncDer_perturbative):
                 #                                   self.coord*self.rdf_R, axis=-1)
                 self.Qprime[:,:,:,:,:,qc] = (self.Qprime[:,:,:,:,:,qc]/3./self.QoI.V)*160.2176*10000.*self.QoI.Natoms/2.
             elif q == 'HeatCapacityVol': # copying issue? 
-                self.Qprime[:,:,:,:,:,qc] = self.Qprime[:,:,:,:,:,self.QoI.PEcol]**2 # eV**2
+                self.Qprime[:,:,:,:,:,qc] = deepcopy(self.Qprime[:,:,:,:,:,self.QoI.PEcol])**2 # eV**2
             elif q == 'HeatCapacityPress':
                 self.Qprime[:,:,:,:,:,qc] = (self.Qprime[:,:,:,:,:,self.QoI.PEcol] + 
                                              self.Qprime[:,:,:,:,:,self.QoI.Pcol]*self.Qprime[:,:,:,:,:,self.QoI.Vcol])**2
@@ -548,13 +508,16 @@ class FuncDer_perturb_coord(FuncDer_perturbative):
                 self.Qprime[:,:,:,:,:,qc] = self.Qprime[:,:,:,:,:,self.QoI.Vcol]**2
             # Volume: pass
 
+        #for qc, q in enumerate(self.QoI.Q_names):
+        #    self.Qprime[:,:,:,:,:,qc] = self.Qprime[:,:,:,:,:,qc]*self.QoI.conversions[qc]
+
 
     def prepare_FD(self):
         self.get_perturbs()
         print("Calculated perturbations")
 
         self.calc_Qprime()
-        print("Calculated perturbation Hamiltonian contribution")
+        print("Calculated perturbation Hamiltonian contributions")
         self.exp_weighting()
         print("Calculated exponential weights")
 

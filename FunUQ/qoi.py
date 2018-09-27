@@ -5,9 +5,10 @@
 import sys, os, subprocess, shutil, numpy as np
 from random import random; from glob import glob
 from matplotlib import pyplot as plt
+from copy import deepcopy
 
 # import local functions
-from .utils import is_thermo, is_fluct, copy_files, read_template, replace_template, submit_lammps
+from .utils import is_thermo, is_fluct, copy_files, read_template, replace_template, submit_lammps, FUQerror
 from .parsetools import read_thermo, find_columns
 
 
@@ -16,7 +17,7 @@ class QuantitiesOfInterest(object):
     '''
     Class for running LAMMPS and extracting thermodynamic results
     '''
-    def __init__(self, Qlist, potential, initdir, maindir, purpose, input_dict=None):
+    def __init__(self, Qlist, potential, initdir, maindir, purpose, unittype, input_dict=None):
         '''
         Defaults for base class; to be modified by user through dictionary as needed
         '''
@@ -26,7 +27,7 @@ class QuantitiesOfInterest(object):
 
         # Quantity of interest
         self.Q_names = list(Qlist)
-        requiredQ = ['PotEng'] #, 'Press', 'Volume']
+        requiredQ = ['PotEng', 'Press', 'Volume']
         for rQ in requiredQ:
             if rQ not in self.Q_names:
                 self.Q_names += [rQ]
@@ -47,6 +48,7 @@ class QuantitiesOfInterest(object):
         self.pot = potential 
 
         self.units = []
+        self.unittype = unittype
         #self.get_units()
 
         # Files and directories
@@ -71,6 +73,7 @@ class QuantitiesOfInterest(object):
         self.copy_folder = 'copy_'
         self.copy_start = 0
 
+        self.create_pot = True
 
         # User overrides defaults
         if input_dict != None:
@@ -93,10 +96,12 @@ class QuantitiesOfInterest(object):
                 os.mkdir(d)
             except: pass
 
-        # Create potential table
-        #if self.createpot:
-        self.pot.create(self.rundir)
-
+        # COPY potential table
+        #if self.create_pot:
+        #    self.pot.create(self.rundir)
+        #else:
+        #    self.pot.copy(self.initdir, self.rundir)
+        self.pot.copy(self.initdir, self.rundir)
 
 
     def run_lammps(self):
@@ -119,9 +124,14 @@ class QuantitiesOfInterest(object):
         if not self.overwrite:
             existing = glob(os.path.join(rundir, 'copy_*'))
             for x in existing:
-                nextcopy = float(x.split(self.copy_folder)[-1])
+                nextcopy = int(x.split(self.copy_folder)[-1])
                 if nextcopy > maxcopy:
                     maxcopy = nextcopy 
+            if maxcopy > 0:
+                maxcopy += 1
+        elif self.copy_start > 0:
+            maxcopy = self.copy_start
+        # TODO can't start at fixed number and not overwrite
 
         for copy in range(maxcopy, maxcopy+self.Ncopies):
             cdir = os.path.join(rundir, self.copy_folder+str(copy))
@@ -155,11 +165,9 @@ class QuantitiesOfInterest(object):
 
                 # Find names of thermo/fluctuation properties
                 Q_thermonames = []
-                #Q_fluctnames = []
                 for q,qthermo in zip(self.Q_names, self.Q_thermo):
                     if qthermo:
                         Q_thermonames += [q]
-                    #else: self.Q_fluctnames += [q]
 
                 # Get columns for thermo properties
                 Q_cols = find_columns(cols, Q_thermonames) #self.Q_names)
@@ -174,7 +182,6 @@ class QuantitiesOfInterest(object):
                 self.beta = 1./8.617e-5/self.T
 
 
-            #for qc, (q,thermoq) in enumerate(zip(self.Q_cols, self.Q_thermo)):
             for qc, (q,qn) in enumerate(zip(self.Q_cols, self.Q_names)):
                 if qn == 'PotEng':
                     self.PEcol = qc
@@ -188,7 +195,7 @@ class QuantitiesOfInterest(object):
                     self.Q[:, copy0, 0,0,0, qc] = thermo[:,q]
                     #self.Q[:,copy0,qc] = thermo[:,q]
                 elif qn == 'HeatCapacityVol':
-                    self.Q[:, copy0, 0,0,0, qc] = thermo[:,self.Q_cols[self.PEcol]]**2
+                    self.Q[:, copy0, 0,0,0, qc] = deepcopy(thermo[:,self.Q_cols[self.PEcol]])**2
                 elif qn == 'HeatCapacityPress':
                     self.Q[:, copy0, 0,0,0, qc] = (thermo[:,self.Q_cols[self.PEcol]]
                                                    + (thermo[:,self.Q_cols[self.Pcol]]*
@@ -203,12 +210,13 @@ class QuantitiesOfInterest(object):
 
                 # TODO: if there are issues, fill with NaN to ignore
                 # Works okay while jobs running IF the first copy stays ahead
-        
+
 
         self.Qavg = np.mean(self.Q, axis=(0,1,2,3,4))
         self.Qstd = np.std(self.Q, axis=(0,1,2,3,4))
+        print (self.Qavg)
 
-        self.get_conversions()
+
         for qc, q in enumerate(self.Q_names):
 
             if q == 'HeatCapacityVol':
@@ -221,6 +229,7 @@ class QuantitiesOfInterest(object):
                 self.Qavg[qc] = fluctuation(self.beta/self.T/self.V, self.Qavg[qc], self.Qavg[self.PEcol] + self.Qavg[self.Pcol]*self.Qavg[self.Vcol])
 
         # ONLY CONVERT after all fluctuations calculated
+        self.get_conversions()
         for qc, q in enumerate(self.Q_names):
             self.Qavg[qc] = self.Qavg[qc]*self.conversions[qc]
 
@@ -229,10 +238,16 @@ class QuantitiesOfInterest(object):
         self.conversions = [1.]*len(self.Q_names)
 
         for qc, q in enumerate(self.Q_names):
-            if q == 'PotEng':
-                self.conversions[qc] = 1./self.Natoms
+            if q == 'PotEng' or q == 'E_vdwl':
+                if self.unittype == 'metal':
+                    self.conversions[qc] = 1./self.Natoms
+                elif self.unittype == 'real':
+                    self.conversions[qc] = 1. #0.0433644/self.Natoms
             elif q == 'Press':
-                self.conversions[qc] = 0.0001
+                if self.unittype == 'metal':
+                    self.conversions[qc] = 0.0001
+                elif self.unittype == 'real':
+                    self.conversions[qc] = 0.000101325
             elif q == 'Volume':
                 self.conversions[qc] = 0.001
             elif 'HeatCapacity' in q:
@@ -242,37 +257,8 @@ class QuantitiesOfInterest(object):
             elif q == 'ThermalExpansion':
                 self.conversions[qc] = 1.
 
-
-    def write_something(self, qc):
-        txt = ("FunUQ v0.4, 2018; Sam Reeve\n"
-               "Functional derivative for {} in {} with {} at {}K with {} atoms; "
-               "Description: {}\n"
-               .format(self.Q_names[qc], self.units[qc], self.pot.potname, self.T, self.Natoms, self.description))
-        for r, fd in zip(self.rlist, self.funcder[:,qc]):
-            txt += "{} {}\n".format(r, fd)
-
-        name = '{}_{}'.format(self.Q_names[qc], self.FDname)
-        with open(os.path.join(self.resultsdir, name), 'w') as f:
-            f.write(txt)
-
-
-    def plot_something(self, qc):
-        plt.figure()
-        plt.plot(self.rlist, self.funcder[:,qc], color='navy')
-        plt.scatter(self.rlist, self.funcder[:,qc], color='navy')
-        plt.xlabel("Position ($\AA$)", fontsize='large')
-        plt.xlim([self.rmin, self.rmax-0.2])
-        x_range = np.where((self.rlist > self.rmin) & (self.rlist < self.rmax))
-        ymin = np.min(self.funcder[x_range,qc])
-        ymin += -ymin*0.1
-        ymax = np.max(self.funcder[x_range,qc])
-        ymax += ymax*0.1
-        plt.ylim([ymin, ymax])
-        plt.ylabel("Functional Derivative ({}/$\AA$)".format(self.units[qc]), fontsize='large')
-        plt.show()
-
     
-def fluctuation(pre, avg_square, avg):
+def fluctuation(pre, avg_ofthe_square, avg):
 
-    return pre*(avg_square - avg**2)
+    return pre*(avg_ofthe_square - avg**2)
 

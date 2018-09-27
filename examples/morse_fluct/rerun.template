@@ -19,7 +19,7 @@ timestep       0.001
 
 
 ### RUN SECTION ###
-thermo_style   custom step cpu etotal pe ke temp vol press pxx pyy pzz pxy pxz pyz lx ly lz xy xz yz v_viscos v_kappa #v_diff
+thermo_style   custom step cpu etotal pe ke temp vol press pxx pyy pzz pxy pxz pyz lx ly lz xy xz yz
 thermo 1000
 
 

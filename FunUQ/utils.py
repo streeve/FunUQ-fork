@@ -13,12 +13,12 @@ class FUQerror(Exception):
 
 def is_thermo(q):
     return q in ['Temp', 'Press', 'PotEng', 'KinEng', 'TotEng', 'Enthalpy',
-                    'Evdwl', 'Ecoul', 'Epair', 'Ebond', 'Eangle', 'Edihed', 'Eimp',
-                    'Emol', 'Elong', 'Etail',
-                    'Volume', 'Density', 'Lx', 'Ly', 'Lz',
-                    'Xy', 'Xz', 'Yz', 'xlat', 'ylat', 'zlat',
-                    'Pxx', 'Pyy', 'Pzz', 'Pxy', 'Pxz', 'Pyz',
-                    'Cella', 'Cellb', 'Cellc', 'Cellalpha', 'Cellbeta', 'Cellgamma']
+                 'E_vdwl', 'E_coul', 'E_pair', 'E_bond', 'E_angle', 'E_dihed', 'E_impro',
+                 'E_mol', 'E_long', 'E_tail',
+                 'Volume', 'Density', 'Lx', 'Ly', 'Lz',
+                 'Xy', 'Xz', 'Yz', 'xlat', 'ylat', 'zlat',
+                 'Pxx', 'Pyy', 'Pzz', 'Pxy', 'Pxz', 'Pyz',
+                 'Cella', 'Cellb', 'Cellc', 'Cellalpha', 'Cellbeta', 'Cellgamma']
 
 
 def is_fluct(q):
