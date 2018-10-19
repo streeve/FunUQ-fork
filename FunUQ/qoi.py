@@ -1,4 +1,4 @@
-# FunUQ v0.4, 2018; Sam Reeve; Strachan Research Group
+# FunUQ v0.1, 2018; Sam Reeve; Strachan Research Group
 # https://github.rcac.purdue.edu/StrachanGroup
 
 # import general
@@ -8,7 +8,7 @@ from matplotlib import pyplot as plt
 from copy import deepcopy
 
 # import local functions
-from .utils import is_thermo, is_fluct, copy_files, read_template, replace_template, submit_lammps, FUQerror
+from .utils import is_thermo, is_fluct, copy_files, read_file, replace_template, submit_lammps, FUQerror
 from .parsetools import read_thermo, find_columns
 
 
@@ -17,7 +17,8 @@ class QuantitiesOfInterest(object):
     '''
     Class for running LAMMPS and extracting thermodynamic results
     '''
-    def __init__(self, Qlist, potential, initdir, maindir, purpose, unittype, input_dict=None):
+    def __init__(self, Qlist, potential, initdir, maindir, purpose, 
+                 unittype='metal', ensemble='nvt', input_dict=None):
         '''
         Defaults for base class; to be modified by user through dictionary as needed
         '''
@@ -27,7 +28,11 @@ class QuantitiesOfInterest(object):
 
         # Quantity of interest
         self.Q_names = list(Qlist)
-        requiredQ = ['PotEng', 'Press', 'Volume']
+        self.ensemble = ensemble
+        if self.ensemble == 'nvt':
+            requiredQ = ['PotEng']
+        elif self.ensemble == 'npt':
+            requiredQ = ['PotEng', 'Volume']
         for rQ in requiredQ:
             if rQ not in self.Q_names:
                 self.Q_names += [rQ]
@@ -49,7 +54,7 @@ class QuantitiesOfInterest(object):
 
         self.units = []
         self.unittype = unittype
-        #self.get_units()
+        self.get_units()
 
         # Files and directories
         self.Ncopies = 5
@@ -84,8 +89,11 @@ class QuantitiesOfInterest(object):
                     raise KeyError("{} is not a valid input parameter.".format(key))
         
         # Get user templates
-        self.intxt = read_template(self.inpath)
-        self.subtxt = read_template(self.subpath)
+        self.intxt = read_file(self.inpath)
+        self.subtxt = read_file(self.subpath)
+
+        self.replace_in = {'SEED':'0', 'TABLECOEFF':'', 'TABLESTYLE':'', 
+                           'RUNDIR':'', 'TEMP':'0'}
 
         # Create/find simulation directories
         self.resultsdir = os.path.join(self.maindir, 'results/')
@@ -101,46 +109,96 @@ class QuantitiesOfInterest(object):
         #    self.pot.create(self.rundir)
         #else:
         #    self.pot.copy(self.initdir, self.rundir)
-        self.pot.copy(self.initdir, self.rundir)
+
+        #self.pot.copy(self.initdir, self.rundir)
+            
+        self.Qavg = [0]*len(self.Q_names)
 
 
-    def run_lammps(self):
+    def __str__(self):
+        out = '\t'.join(self.Q_names) + '\n'
+        for avg in self.Qavg:
+            out += '{:.3f}\t'.format(avg)
+        out += '\n'
+
+        return out
+
+
+    # This is mostly for plotting
+    def get_units(self):
+        if self.unittype == 'metal':
+            self.PE_units = ' (eV)'
+        elif self.unittype == 'real':
+            self.PE_units = ' (kcal/mol)'
+        else:
+            self.PE_units == ''
+
+
+    def run_lammps(self, mode='PBS'):
         '''
         Run unmodified potential (multiple copies)
         Main perturbative or verification second potential
-
-        Args: potential class object
         '''
-        if self.pot == None:
-            replace_in = {'SEED':'0'}
-            rundir = self.rundir
-        else:
-            replace_in = {'TABLECOEFF':self.pot.paircoeff, 'TABLESTYLE':self.pot.pairstyle, 'SEED':'0'}
-            replace_sub = {'NAME': self.name, 'INFILE': self.infile}
-            rundir = self.pot.potdir
-        copy_files(self.initdir, rundir)
 
+        # TODO: this is confusing; it's either local or it's in one dir
+        if mode == 'nanoHUB_submit':
+            self.pot.paircoeff = self.pot.paircoeff.replace(self.pot.paramdir, '.')
+            self.replace_in['RUNDIR'] = '.'
+        else:
+            self.replace_in['RUNDIR'] = self.pot.paramdir
+
+        #if self.pot == None:
+        #    rundir = self.rundir
+        #else:
+        self.replace_in['TABLECOEFF'] = self.pot.paircoeff
+        self.replace_in['TABLESTYLE'] = self.pot.pairstyle
+        # only half of these are ever necessary
+        replace_sub = {'NAME': self.name, 'INFILE': self.infile}
+            #rundir = self.pot.potdir
+
+
+        #copy_files(self.initdir, self.rundir)
+
+        # Defaults to not overwriting, taking user choice into account
         maxcopy = 0
         if not self.overwrite:
-            existing = glob(os.path.join(rundir, 'copy_*'))
+            existing = glob(os.path.join(self.rundir, self.copy_folder+'*'))
             for x in existing:
                 nextcopy = int(x.split(self.copy_folder)[-1])
-                if nextcopy > maxcopy:
-                    maxcopy = nextcopy 
-            if maxcopy > 0:
-                maxcopy += 1
-        elif self.copy_start > 0:
+                if nextcopy >= maxcopy:
+                    maxcopy = nextcopy +1
+        if self.copy_start > 0 or maxcopy < self.copy_start:
             maxcopy = self.copy_start
-        # TODO can't start at fixed number and not overwrite
 
         for copy in range(maxcopy, maxcopy+self.Ncopies):
-            cdir = os.path.join(rundir, self.copy_folder+str(copy))
-            replace_in['SEED'] = str(int(random()*100000))
+            cdir = os.path.join(self.rundir, self.copy_folder+str(copy))
+            self.replace_in['SEED'] = str(int(random()*100000))
             replace_sub['NAME'] = '{}_{}'.format(self.name, copy)
-            intxt = replace_template(self.intxt, replace_in)
-            subtxt = replace_template(self.subtxt, replace_sub)
-            submit_lammps(self.subfile, subtxt,
-                          self.infile, intxt, cdir)
+            intxt = replace_template(self.intxt, self.replace_in)
+            if 'PBS' in mode:
+                subtxt = replace_template(self.subtxt, replace_sub)
+            elif 'submit' in mode:
+                subtxt = self.submit_paths(intxt)
+            else: 
+                subtxt = ''
+            submit_lammps(cdir, subfile=self.subfile, subtxt=subtxt,
+                          infile=self.infile, intxt=intxt, mode=mode)
+
+
+    def submit_paths(self, intxt, potpath=None): 
+        extra = ''
+        if 'read_data' in self.intxt:
+            dfile = self.intxt.split('read_data')[-1].split('\n')[0].split('/')[-1].strip()
+            extra += ' -i '
+            extra += os.path.join(self.pot.paramdir, dfile)
+        #elif 'pair_coeff' in self.intxt: # Always present
+        extra += ' -i '
+        if potpath == None:
+            extra += self.pot.potpath
+        else:
+            extra += potpath
+
+        return extra
 
 
     def extract_lammps(self, log='log.lammps'):
@@ -178,6 +236,8 @@ class QuantitiesOfInterest(object):
 
                 # Get other necessary properties
                 self.V = thermo[0, find_columns(cols, ['Volume'])[0]]
+                self.P = (thermo[0, find_columns(cols, ['Press'])[0]]
+                          *0.0001/160.21766208) # bar -> GPa -> eV/A**3
                 self.T = thermo[0, find_columns(cols, ['Temp'])[0]]
                 self.beta = 1./8.617e-5/self.T
 
@@ -190,12 +250,16 @@ class QuantitiesOfInterest(object):
                 if qn == 'Volume':
                     self.Vcol = qc
 
-                    
+                # Next copy may have more or fewer steps finished
+                # Return reduced/padded array
+                thermo = fix_arr(self.Ntimes, thermo)
+
                 if self.Q_thermo[qc]:
                     self.Q[:, copy0, 0,0,0, qc] = thermo[:,q]
-                    #self.Q[:,copy0,qc] = thermo[:,q]
+                    
+                    
                 elif qn == 'HeatCapacityVol':
-                    self.Q[:, copy0, 0,0,0, qc] = deepcopy(thermo[:,self.Q_cols[self.PEcol]])**2
+                    self.Q[:, copy0, 0,0,0, qc] = thermo[:,self.Q_cols[self.PEcol]]**2
                 elif qn == 'HeatCapacityPress':
                     self.Q[:, copy0, 0,0,0, qc] = (thermo[:,self.Q_cols[self.PEcol]]
                                                    + (thermo[:,self.Q_cols[self.Pcol]]*
@@ -212,9 +276,8 @@ class QuantitiesOfInterest(object):
                 # Works okay while jobs running IF the first copy stays ahead
 
 
-        self.Qavg = np.mean(self.Q, axis=(0,1,2,3,4))
-        self.Qstd = np.std(self.Q, axis=(0,1,2,3,4))
-        print (self.Qavg)
+        self.Qavg = np.nanmean(self.Q, axis=(0,1,2,3,4))
+        self.Qstd = np.nanstd(self.Q, axis=(0,1,2,3,4))
 
 
         for qc, q in enumerate(self.Q_names):
@@ -261,4 +324,19 @@ class QuantitiesOfInterest(object):
 def fluctuation(pre, avg_ofthe_square, avg):
 
     return pre*(avg_ofthe_square - avg**2)
+
+
+
+def fix_arr(Nmax, arr, sample=False):
+    # TODO: sample without requiring start from zero
+    (Ncurr, col) = np.shape(arr)
+
+    if Ncurr > Nmax:
+        arr = arr[:Nmax,:]
+    elif Ncurr < Nmax:
+        Nblank = Nmax - Ncurr
+        arr = np.pad(arr, [(0, Nblank), (0, 0)], 'constant', constant_values=np.nan)
+    # else return without modifying
+
+    return arr
 

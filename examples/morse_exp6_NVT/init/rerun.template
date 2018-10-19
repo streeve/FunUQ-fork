@@ -1,0 +1,27 @@
+log LOGNAME
+
+### SETUP SECTION ###
+units metal
+atom_style atomic
+boundary p p p
+
+### Just to satisfy lammps
+region box block 0 1 0 1 0 1
+create_box 1 box
+
+mass * 63.55
+
+TABLESTYLE
+TABLECOEFF
+
+timestep       0.001
+
+
+
+### RUN SECTION ###
+thermo_style   custom step cpu etotal pe ke temp vol press pxx pyy pzz pxy pxz pyz lx ly lz xy xz yz
+thermo 1000
+
+
+rerun ../funcder_1.dump dump x y z vx vy vz replace no purge yes add yes
+

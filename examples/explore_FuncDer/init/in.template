@@ -2,7 +2,7 @@ units metal
 atom_style atomic
 boundary p p p
 
-read_data ../init.data
+read_data RUNDIR/init.data
 
 mass * 63.55
 
@@ -27,7 +27,7 @@ thermo 1000
 compute RDF_2000 all rdf 2000
 fix RDFout_2000 all ave/time 1 1 1000 c_RDF_2000[*] file funcder_1_2000.rdf mode vector
 compute RDF_total all rdf 2000
-fix RDFout_total all ave/time 1000 2000 2000000  c_RDF_total[*] file funcder_1_total.rdf mode vector
+fix RDFout_total all ave/time 1000 1000 1000000  c_RDF_total[*] file funcder_1_total.rdf mode vector
 
-run 2000000 
+run 250000
 

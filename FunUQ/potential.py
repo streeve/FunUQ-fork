@@ -1,4 +1,4 @@
-# FunUQ v0.4, 2018; Sam Reeve; Strachan Research Group
+# FunUQ v0.1, 2018; Sam Reeve; Strachan Research Group
 # https://github.rcac.purdue.edu/StrachanGroup
 
 import sys, os, numpy as np, shutil, subprocess
@@ -14,20 +14,24 @@ class Potential(object):
           Each should use copy and accept all kwargs currently in "create_table"
     '''
     def __init__(self, pot, create=True, paramfile=None, paramdir=None,
-                 potfile=None, potdir='', 
-                 N=8000, rlo=0.001, rhi=8.0, cut=6.,
+                 potfile=None, key=None, 
+                 N=8000, rmin=0.001, rmax=8.0, cut=6.,
                  r0=1.0, c0=0.0, a0=0.0):
 
         self.potname = pot
+        self.paramdir = paramdir
+        self.rmin = rmin
+        self.rmax = rmax
+        self.N = N
+        self.cut = cut
 
-        # Here, paramfile is only the coeff for the table creation function below
         if paramfile == None and create:
             self.paramfile = '{}.params'.format(self.potname)
         else: 
             self.paramfile = paramfile
 
-        if paramdir != None and create:
-            self.parampath = os.path.join(paramdir, self.paramfile)
+        if self.paramdir != None and create:
+            self.parampath = os.path.join(self.paramdir, self.paramfile)
         else:
             self.parampath = self.paramfile
 
@@ -35,17 +39,30 @@ class Potential(object):
             self.potfile = '{}.table'.format(self.potname)
         else: 
             self.potfile = potfile
-        self.potpath = os.path.join(paramdir, self.potfile)
+        self.potpath = os.path.join(self.paramdir, self.potfile)
+
+
+        if key == None:
+            self.key = "{}_1".format(self.potname)
+        else:
+            self.key = key
+
+        self.head = ("# pair_style table for LAMMPS; Created by FunUQ Python;"
+                     " Sam Reeve; potential: {}; \n\n"
+                     "{}\n"
+                     "N {}\n\n").format(self.potname, self.key, N)
 
         if create:
-            self.create_table(N, rlo, rhi, cut) #self.potname, self.parampath) #, savedir=potdir)
+            self.create_table()
         else:
-            #subprocess.call(['lmp', '-i', self.parampath]) #TODO REMOVE
-            R, PE, style, coeff = read_file(self.potpath)
+            R, PE, key = read_file(self.potpath)
             self.R = R
             self.PE = PE
-            self.pairstyle = style
-            self.paircoeff = coeff
+            self.key = key
+
+        self.pairstyle = "pair_style table linear {}".format(N)
+        # Use rmax instead of cut so that the RDF goes out beyond the cutoff
+        self.paircoeff = "pair_coeff * * {} {} {}".format(self.potpath, self.key, self.rmax)
 
 
     # Need to copy later
@@ -53,26 +70,37 @@ class Potential(object):
         self.potdir = potdir
         potfile = os.path.join(initdir, self.potname+'.table')
         shutil.copy(potfile, potdir)
-        R, PE, style, coeff = read_file(potfile)
+
+        self.paircoeff = "pair_coeff * * {} {} {}".format(potdir, self.key, self.rmax)
+
+        R, PE, key = read_file(potfile)
         self.R = R
         self.PE = PE
-        self.pairstyle = style
-        self.paircoeff = coeff
 
 
-    def plot(self):
-        plt.scatter(self.R, self.PE, c='navy')
-        plt.ylim([-0.2, 0.2])
-        plt.xlim([2, 12])
+    def plot(self, ax=None, color='navy', label=None, unit=''):
+        if ax == None:
+            fig1, ax = plt.subplots(1,1)
+        if label == None:
+            label = self.potname
+
+        ax.plot(self.R, self.PE, c=color, linewidth=4, label=label)
+        ax.set_ylim([-0.2, 0.2])
+        ax.set_xlim([np.min(self.R), np.max(self.R)])
+        ax.set_ylabel("Potential Energy{}".format(unit), fontsize='large')
+        ax.set_xlabel("Position ($\AA$)", fontsize='large')
+        ax.legend(loc='best')
+        #ax.set_xlim([1.5, 6.5])
+        #ax.set_ylim([-0.17, 0.05])
         plt.show()
+        return ax 
 
 
-
-    def create_table(self, N, rlo, rhi, cut, 
-                     potname=None, smooth='4th', 
+    def create_table(self, smooth='4th', smooth_w=1.5,
                      r0=1.0, c0=0.0, a0=0.0, 
-                     smooth_w=1.5, 
-                     outname=None, savedir=None):
+                     keep=True, write=True,
+                     only_gauss=False,
+                     savepath=None):
         '''
         Creates LAMMPS "pair_style table" file
         
@@ -81,81 +109,64 @@ class Potential(object):
         smooth: 4th order multiplicative smoothing function
         
         N: Number of points
-        minR/maxR: Limits of distance tabulatec
+        minR/maxR: Limits of distance tabulation
         r0/a0/c0: Gaussian perturbations for FunUQ
         
         To be used with LAMMPS "metal" (eV and Angstrom)
         '''
         
-        if potname == None: potname = self.potname
-        if outname == None: outname = self.potfile
-        if savedir == None: savedir = self.potpath
-        #if not outname:
-        #    outname = '{}.table'.format(style)
-    
-        key = "{}_1".format(potname)
-        head = ("# pair_style table for LAMMPS; Created by {};"
-                " Sam Reeve; potential: {}; smoothing: {} \n\n"
-                "{}\n"
-                "N {}\n\n").format(sys.argv[0], potname, smooth, key, N)
-        self.pairstyle = "pair_style table linear {}".format(N)
-        self.paircoeff = "pair_coeff * * ../{} {} {}".format(outname, key, cut)
-
-        R = np.linspace(rlo, rhi, N)
+        if savepath == None:
+            savepath = self.potpath
+        
+        R = np.linspace(self.rmin, self.rmax, self.N)
+        cut = self.cut
         cut_id = np.where(R > cut)[0][0]
 
 
-        if potname != 'gauss':
+        if not only_gauss:
             params = read_params(self.parampath)
 
-        if potname == 'lj':
-            epsilon, sigma = params
+            if self.potname == 'lj':
+                epsilon, sigma = params
 
-            F = 24*epsilon/sigma*(2*(sigma/R)**13 - (sigma/R)**7)
-            PE = 4*epsilon*((sigma/R)**12 - (sigma/R)**6)
-        elif potname == 'morse':
-            D0, alpha, r0_M = params
-
-            F = 2*alpha*D0*(np.exp(-2*alpha*(R - r0_M)) - np.exp(-alpha*(R - r0_M)))
-            PE = D0*(np.exp(-2*alpha*(R - r0_M)) - 2*np.exp(-alpha*(R - r0_M)))
-
-        elif potname == 'exp6':
-            epsilon, alpha, r0_E6 = params
-        
-            F = 6*epsilon/(1.-6./alpha)/r0_E6*(np.exp(alpha*(1 - R/r0_E6)) - (r0_E6/R)**7)
-            PE = epsilon/(1.-6./alpha)*(6./alpha*np.exp(alpha*(1 - R/r0_E6)) - (r0_E6/R)**6)
-
-        elif potname == 'fake_exp6':
-            epsilon, alpha, r0_E6 = params
-        
-            F = 2*alpha*epsilon*(np.exp(-2*alpha*(R - r0_E6)) - (r0_E6/R)**7)
-            PE = epsilon*(np.exp(-2*alpha*(R - r0_E6)) - 2*(r0_E6/R)**6)
-        
-        elif potname == 'sin_test':
-            epsilon, sigma = params
-
-            F = 24*epsilon/sigma*(2*(sigma/R)**13 - (sigma/R)**7) -0.0782*np.cos(0.17*(24.2+R))
-            PE = 4*epsilon*((sigma/R)**12 - (sigma/R)**6) +0.44+0.49*np.sin(0.19*(R+24.))
-
-        elif potname == 'gauss':
-            F = np.zeros([N])
-            PE = np.zeros([N])
+                F = 24*epsilon/sigma*(2*(sigma/R)**13 - (sigma/R)**7)
+                PE = 4*epsilon*((sigma/R)**12 - (sigma/R)**6)
+            elif self.potname == 'morse':
+                D0, alpha, r0_M = params
+                
+                F = 2*alpha*D0*(np.exp(-2*alpha*(R - r0_M)) - np.exp(-alpha*(R - r0_M)))
+                PE = D0*(np.exp(-2*alpha*(R - r0_M)) - 2*np.exp(-alpha*(R - r0_M)))
+                
+            elif self.potname == 'exp6':
+                epsilon, alpha, r0_E6 = params
+                
+                F = 6*epsilon/(1.-6./alpha)/r0_E6*(np.exp(alpha*(1 - R/r0_E6)) - (r0_E6/R)**7)
+                PE = epsilon/(1.-6./alpha)*(6./alpha*np.exp(alpha*(1 - R/r0_E6)) - (r0_E6/R)**6)
+                
+            elif self.potname == 'fake_exp6':
+                epsilon, alpha, r0_E6 = params
+                
+                F = 2*alpha*epsilon*(np.exp(-2*alpha*(R - r0_E6)) - (r0_E6/R)**7)
+                PE = epsilon*(np.exp(-2*alpha*(R - r0_E6)) - 2*(r0_E6/R)**6)
+                
+            else:
+                raise TableException("Style not supported.\n\n")
             
-        else:
-            raise TableException("Style not supported.\n\n")
-            exit()
 
-
-        if smooth == '4th':
-            smooth = ((R - cut)/smooth_w)**4/(1 + ((R - cut)/smooth_w)**4)
-            smoothdiff = (4*smooth_w**4*(cut-R)**3)/(smooth_w**4+(cut-R)**4)**2
-
-            F = PE*smoothdiff + F*smooth
-            PE = PE*smooth
-
-            F[cut_id:] = np.zeros(np.shape(R[cut_id:])) # shift
-            PE[cut_id:] = np.zeros(np.shape(R[cut_id:])) # shift
+            if smooth == '4th':
+                smooth = ((R - cut)/smooth_w)**4/(1 + ((R - cut)/smooth_w)**4)
+                smoothdiff = (4*smooth_w**4*(cut-R)**3)/(smooth_w**4+(cut-R)**4)**2
+                
+                F = PE*smoothdiff + F*smooth
+                PE = PE*smooth
+                
+                F[cut_id:] = np.zeros(np.shape(R[cut_id:])) # shift
+                PE[cut_id:] = np.zeros(np.shape(R[cut_id:])) # shift
   
+        else:
+            F = np.zeros([self.N])
+            PE = np.zeros([self.N])
+
 
         if abs(a0) > 0.0:
             # add gauss after smoothing
@@ -164,12 +175,13 @@ class Potential(object):
             gauss = 1/(np.sqrt(2*np.pi)*c0) * a0*np.exp(-(R - r0)**2/(2*c0**2))
             PE += gauss
 
+        if write:
+            write_file(savepath, self.head, self.N, R, PE, F)
 
-        write_file(savedir, head, N, R, PE, F)
-        self.PE = PE
-        self.R = R
+        if keep:
+            self.PE = PE
+            self.R = R
 
-        return
 
 
 
@@ -190,9 +202,13 @@ def read_file(fname):
     data = np.loadtxt(fname, skiprows=4)
     R = data[:,1]
     PE = data[:,2]
-    style = ''
-    coeff = ''
-    return R, PE, style, coeff
+
+    with open(fname) as f:
+        for k in range(3):
+            key = f.readline()
+    key = key.strip()
+
+    return R, PE, key
 
                    
 def read_params(fname):

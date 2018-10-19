@@ -1,8 +1,8 @@
-# FunUQ v0.3, 2018; Sam Reeve; Strachan Research Group
+# FunUQ v0.1, 2018; Sam Reeve; Strachan Research Group
 # https://github.rcac.purdue.edu/StrachanGroup
 
 # import general
-import sys, os, subprocess, shutil, numpy as np
+import sys, os, subprocess, shutil, numpy as np, shlex
 from random import random; from glob import glob
 
 
@@ -22,13 +22,14 @@ def is_thermo(q):
 
 
 def is_fluct(q):
+    print("WARNING: fluctionation properties still in dev.")
     return q in ['HeatCapacityVol', 'HeatCapacityPress', 'Compressibility', 'ThermalExpansion']
 
 
-def read_template(fname):
+def read_file(fname):
     tname = glob(fname)
     if not tname:
-        raise FUQerror("Could not find template file: {}".format(fname))
+        raise FUQerror("Could not find file: {}".format(fname))
     else:
         with open(tname[0]) as f:
             txt = f.read()
@@ -55,7 +56,10 @@ def write_file(txt, dest):
         f.write(txt)
 
 
-def submit_lammps(subfile, subtxt, infile, intxt, fold):
+def submit_lammps(fold, subfile=None, subtxt=None, 
+                  infile=None, intxt=None, 
+                  mode='PBS', resub=False,
+                  cores=1, minutes=30):
     '''
     Submit LAMMPS simulation given a PBS file and input file
     '''
@@ -64,13 +68,53 @@ def submit_lammps(subfile, subtxt, infile, intxt, fold):
     try:
         os.mkdir(fold)
     except:
-        print("{} is being overwritten".format(fold))
+        if 'rerun_gauss' not in fold:
+            print("{} is being overwritten".format(fold))
 
     os.chdir(fold)
-    write_file(subtxt, subfile)
-    write_file(intxt, infile)
+    if not resub:
+        write_file(intxt, infile)
 
-    subprocess.call(['qsub', subfile])
+    if mode == 'PBS':
+        PBS_submit(subfile, subtxt)
+    elif mode == 'nanoHUB_submit':
+        nanoHUB_submit(infile, subtxt, 
+                       cores, minutes)
+    elif mode == 'nanoHUB_local':
+        nanoHUB_local(infile)
+    elif mode == 'nanoHUB_local_wait':
+        nanoHUB_local_wait(infile)
+
     os.chdir(codedir)
 
 
+def PBS_submit(subfile, subtxt):
+    write_file(subtxt, subfile)
+    subprocess.call(['qsub', subfile])
+    return 
+
+
+def nanoHUB_submit(infile, subtxt,
+                   cores, minutes):
+    # Here, subtxt is extra file args
+    command = ("submit -n {} -w {} {} "
+                   "lammps-09Dec14-parallel -i {}".format(cores, minutes,
+                                                          subtxt, infile))
+    subprocess.Popen(shlex.split(command),
+                     stdout=subprocess.PIPE,
+                     stderr=subprocess.PIPE)
+    return
+
+
+def nanoHUB_local(infile):
+    command = 'lmp_serial -i {}'.format(infile)
+    subprocess.Popen(shlex.split(command),
+                     stdout=subprocess.PIPE,
+                     stderr=subprocess.PIPE)
+    return
+
+
+def nanoHUB_local_wait(infile):
+    command = 'lmp_serial -i {}'.format(infile)
+    subprocess.call(shlex.split(command))
+    return

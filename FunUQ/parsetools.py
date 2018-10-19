@@ -1,5 +1,4 @@
-#!/usr/bin/python
-# parselammps.py 
+
 import sys, os, re, numpy as np
 from operator import methodcaller
 
@@ -39,7 +38,8 @@ def read_thermo(f, ignore_equil=False, only_last=True, last_half=False,
             Natoms = int(loglines[lc+1].split()[0])
 
     if not head_list:
-        raise FUQerror("No thermo data (read_thermo)")
+        raise FUQerror("No thermo data (read_thermo)\n"
+                       "Simulations may not be finished\n")
 
     Nhead = len(head_list)
     Ntail = len(tail_list)
@@ -47,7 +47,9 @@ def read_thermo(f, ignore_equil=False, only_last=True, last_half=False,
         if Nhead == Ntail + 1:
             tail_list.append(Nlog)
         else:
-            raise FUQerror("Parsing error (read_thermo)")
+            raise FUQerror("Parsing error (read_thermo)"
+                           "Simulations may not be finished\n")
+
 
     diff_list = np.array(tail_list, dtype='int32') - np.array(head_list, dtype='int32')
 
@@ -110,7 +112,7 @@ def block_avg(arr, samples, axis=1):
     sets = int(shape[0]/samples)
     mostarr = arr[:sets*samples,:]
     newarr = np.reshape(mostarr, (sets, samples, -1))
-    newarr = np.mean(newarr, axis=1)
+    newarr = np.nanmean(newarr, axis=1)
     
     return newarr
 

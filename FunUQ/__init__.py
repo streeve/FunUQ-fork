@@ -1,5 +1,5 @@
 '''
-Functional Uncertainty Quantification (FunUQ) with python
+Functional Uncertainty Quantification (FunUQ) for MD with python
 
 Sam Reeve; Strachan Research Group; Purdue University
 '''
@@ -17,4 +17,4 @@ from .qoi import QuantitiesOfInterest
 
 
 name = "FunUQ"
-__version__ = '0.4'
+__version__ = '0.1'
