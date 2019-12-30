@@ -3,7 +3,7 @@
 
 # import general
 import sys, os, subprocess, shutil, numpy as np
-from random import random; from glob import glob
+from random import random, sample; from glob import glob
 from matplotlib import pyplot as plt
 from copy import deepcopy
 
@@ -17,18 +17,28 @@ class QuantitiesOfInterest(object):
     '''
     Class for running LAMMPS and extracting thermodynamic results
     '''
-    def __init__(self, Qlist, potential, initdir, maindir, purpose, 
-                 unittype='metal', ensemble='nvt', input_dict=None):
+    def __init__(self, Qlist, Potential, maindir, init, run, 
+                 **kwargs):
         '''
-        Defaults for base class; to be modified by user through dictionary as needed
+        Defaults for base class
+
+        INPUTS:
+        Required:
+            Qlist - List of quantities of interest
+            Potential - FunUQ potential object
+            maindir - Full path to calculations
+            init - Directory name for LAMMPS and potential files
+            run - Directory name for LAMMPS simulations and FunUQ results
+
+        Optional:
+            description - String describing calculations
         '''
 
         self.overwrite = False
-        #self.run = False
 
         # Quantity of interest
         self.Q_names = list(Qlist)
-        self.ensemble = ensemble
+        self.ensemble = kwargs.get('ensemble', 'nvt')
         if self.ensemble == 'nvt':
             requiredQ = ['PotEng']
         elif self.ensemble == 'npt':
@@ -45,61 +55,69 @@ class QuantitiesOfInterest(object):
             self.Q_thermo[qc] = thermo
             if not thermo:
                 fluct = is_fluct(q)
+                if fluct:
+                    print("WARNING: fluctionation properties still in development")
                 if not fluct:
                     raise FUQerror("{} is not a supported quantity of interest."
                                    .format(q))
 
 
-        self.pot = potential 
+        self.pot = Potential 
 
-        self.units = []
-        self.unittype = unittype
-        self.get_units()
+        self.units = kwargs.get('units', ['']*len(self.Q_names))
+        self.unittype = kwargs.get('unittype', 'metal')
+        self.get_units() # This is only for energy (from unittype)
 
         # Files and directories
-        self.Ncopies = 5
-        self.intemplate = 'in.template'
-        self.subtemplate = 'submit.template'
-        self.infile = 'in.lammps'
-        self.subfile = 'run.pbs'
-        self.logfile = 'log.lammps'
-        self.initdir = initdir
+        self.Ntimes = kwargs.get('Ntimes')
+        self.Ncopies = kwargs.get('Ncopies', 1)
+        self.sample = kwargs.get('sample', True)
+        self.Nmax = None 
+
+        self.init = init
+        self.run = run
         self.maindir = maindir
-        self.FDname = 'out.funcder'
+        self.intemplate = kwargs.get('intemplate', 'in.template')
+        self.subtemplate = kwargs.get('subtemplate', 'submit.template')
+        self.infile = kwargs.get('infile', 'in.lammps')
+        self.subfile = kwargs.get('subfile', 'run.pbs')
+        self.logfile = kwargs.get('logfile', 'log.lammps')
+        self.FDname = kwargs.get('FDname', 'out.funcder')
         
         #self.parampath = os.path.join(initdir, self.paramfile)
+        self.initdir = os.path.join(self.maindir, self.init)
         self.inpath = os.path.join(self.initdir, self.intemplate)
         self.subpath = os.path.join(self.initdir, self.subtemplate)
 
         # Other
-        self.description = ''
-        self.name = self.pot.potname
-        self.rerun_folder = 'rerun_'
-        self.copy_folder = 'copy_'
-        self.copy_start = 0
+        self.description = kwargs.get('description', '')
+        self.name = kwargs.get('name', self.pot.potname)
+        self.rerun_folder = kwargs.get('rerun_folder', 'rerun_')
+        self.copy_folder = kwargs.get('copy_folder', 'copy_')
+        self.copy_start = kwargs.get('copy_start', 0)
 
-        self.create_pot = True
+        self.create_pot = kwargs.get('create_pot', True)
 
         # User overrides defaults
+        '''
         if input_dict != None:
             for key, val in input_dict.items():
                 try: 
                     setattr(self, key, val)
                 except:
                     raise KeyError("{} is not a valid input parameter.".format(key))
-        
+        '''
         # Get user templates
         self.intxt = read_file(self.inpath)
-        self.subtxt = read_file(self.subpath)
-
-        self.replace_in = {'SEED':'0', 'TABLECOEFF':'', 'TABLESTYLE':'', 
-                           'RUNDIR':'', 'TEMP':'0'}
+        self.mode = kwargs.get('mode')
+        if self.mode == 'PBS':
+            self.subtxt = read_file(self.subpath)
 
         # Create/find simulation directories
         self.resultsdir = os.path.join(self.maindir, 'results/')
-        self.rundir = os.path.join(self.maindir, '{}_runs/'.format(purpose))
+        self.rundir = os.path.join(self.maindir, '{}_runs/'.format(self.run))
 
-        for d in [self.maindir, self.rundir, self.resultsdir]:
+        for d in [self.rundir, self.resultsdir]:
             try:
                 os.mkdir(d)
             except: pass
@@ -139,66 +157,33 @@ class QuantitiesOfInterest(object):
         Run unmodified potential (multiple copies)
         Main perturbative or verification second potential
         '''
+        replace_in = {'SEED':'0', 'TABLECOEFF':'', 'TABLESTYLE':'',
+                      'RUNDIR':'', 'TEMP':'0', 'POTFILE':''}
 
         # TODO: this is confusing; it's either local or it's in one dir
         if mode == 'nanoHUB_submit':
             self.pot.paircoeff = self.pot.paircoeff.replace(self.pot.paramdir, '.')
-            self.replace_in['RUNDIR'] = '.'
+            replace_in['RUNDIR'] = '.'
+            potpath=self.pot.potpath
+            initdir=self.pot.paramdir,
         else:
-            self.replace_in['RUNDIR'] = self.pot.paramdir
+            replace_in['RUNDIR'] = self.pot.paramdir
+            potpath = None
+            initdir = None
 
-        #if self.pot == None:
-        #    rundir = self.rundir
-        #else:
-        self.replace_in['TABLECOEFF'] = self.pot.paircoeff
-        self.replace_in['TABLESTYLE'] = self.pot.pairstyle
-        # only half of these are ever necessary
+        replace_in['TABLECOEFF'] = self.pot.paircoeff
+        replace_in['TABLESTYLE'] = self.pot.pairstyle
+        replace_in['POTFILE'] = self.pot.potfile
+
         replace_sub = {'NAME': self.name, 'INFILE': self.infile}
-            #rundir = self.pot.potdir
+        
+        copy_list = np.arange(self.copy_start, self.Ncopies, dtype='int')
+        copy_rundir = os.path.join(self.rundir, self.copy_folder+'{}')
 
-
-        #copy_files(self.initdir, self.rundir)
-
-        # Defaults to not overwriting, taking user choice into account
-        maxcopy = 0
-        if not self.overwrite:
-            existing = glob(os.path.join(self.rundir, self.copy_folder+'*'))
-            for x in existing:
-                nextcopy = int(x.split(self.copy_folder)[-1])
-                if nextcopy >= maxcopy:
-                    maxcopy = nextcopy +1
-        if self.copy_start > 0 or maxcopy < self.copy_start:
-            maxcopy = self.copy_start
-
-        for copy in range(maxcopy, maxcopy+self.Ncopies):
-            cdir = os.path.join(self.rundir, self.copy_folder+str(copy))
-            self.replace_in['SEED'] = str(int(random()*100000))
-            replace_sub['NAME'] = '{}_{}'.format(self.name, copy)
-            intxt = replace_template(self.intxt, self.replace_in)
-            if 'PBS' in mode:
-                subtxt = replace_template(self.subtxt, replace_sub)
-            elif 'submit' in mode:
-                subtxt = self.submit_paths(intxt)
-            else: 
-                subtxt = ''
-            submit_lammps(cdir, subfile=self.subfile, subtxt=subtxt,
-                          infile=self.infile, intxt=intxt, mode=mode)
-
-
-    def submit_paths(self, intxt, potpath=None): 
-        extra = ''
-        if 'read_data' in self.intxt:
-            dfile = self.intxt.split('read_data')[-1].split('\n')[0].split('/')[-1].strip()
-            extra += ' -i '
-            extra += os.path.join(self.pot.paramdir, dfile)
-        #elif 'pair_coeff' in self.intxt: # Always present
-        extra += ' -i '
-        if potpath == None:
-            extra += self.pot.potpath
-        else:
-            extra += potpath
-
-        return extra
+        submit_lammps(replace_in, self.infile, self.intxt,
+                      copy_rundir, copy_list, self.overwrite,
+                      potpath=potpath, initdir=initdir,
+                      replace_sub=replace_sub, mode=mode)
 
 
     def extract_lammps(self, log='log.lammps'):
@@ -209,13 +194,15 @@ class QuantitiesOfInterest(object):
         for copy0, copy in enumerate(range(self.copy_start, self.copy_start + self.Ncopies)):
             logfile = os.path.join(self.rundir, self.copy_folder+str(copy), log) 
             cols, thermo, Natoms = read_thermo(logfile)
-
+            
             # Only extract these values once
             if not copy0:
                 self.Natoms = Natoms
-                self.Ntimes = np.shape(thermo)[0]
-                #self.times = np.array(sample(range(startsteps, totalsteps), self.Ntimes))
+                self.Nmax = np.shape(thermo)[0]
+                if self.Ntimes is None:
+                    self.Ntimes = self.Nmax
 
+                self.times = np.zeros([self.Ntimes, self.Ncopies], dtype='int')
                 #self.Q = np.zeros([self.Ntimes, self.Ncopies, len(self.Q_names)])
                 self.Q = np.zeros([self.Ntimes, self.Ncopies, 1,1,1, len(self.Q_names)])
                 self.Qavg = np.zeros([len(self.Q_names)])
@@ -241,6 +228,15 @@ class QuantitiesOfInterest(object):
                 self.T = thermo[0, find_columns(cols, ['Temp'])[0]]
                 self.beta = 1./8.617e-5/self.T
 
+            # Next copy may have more or fewer steps finished
+            # Return reduced/padded array
+            thermo = fix_arr(self.Ntimes, thermo)
+
+            # Randomly sample for convergence plots
+            if self.sample:
+                self.times[:,copy0] = np.array(sample(range(self.Nmax), self.Ntimes))
+            else:
+                self.times[:,copy0] = np.arange(self.Ntimes)
 
             for qc, (q,qn) in enumerate(zip(self.Q_cols, self.Q_names)):
                 if qn == 'PotEng':
@@ -250,24 +246,20 @@ class QuantitiesOfInterest(object):
                 if qn == 'Volume':
                     self.Vcol = qc
 
-                # Next copy may have more or fewer steps finished
-                # Return reduced/padded array
-                thermo = fix_arr(self.Ntimes, thermo)
-
                 if self.Q_thermo[qc]:
-                    self.Q[:, copy0, 0,0,0, qc] = thermo[:,q]
+                    self.Q[:, copy0, 0,0,0, qc] = thermo[self.times[:,copy0],q]
                     
                     
                 elif qn == 'HeatCapacityVol':
-                    self.Q[:, copy0, 0,0,0, qc] = thermo[:,self.Q_cols[self.PEcol]]**2
+                    self.Q[:, copy0, 0,0,0, qc] = thermo[self.times,self.Q_cols[self.PEcol]]**2
                 elif qn == 'HeatCapacityPress':
-                    self.Q[:, copy0, 0,0,0, qc] = (thermo[:,self.Q_cols[self.PEcol]]
-                                                   + (thermo[:,self.Q_cols[self.Pcol]]*
-                                                      thermo[:,self.Q_cols[self.Vcol]]))**2
+                    self.Q[:, copy0, 0,0,0, qc] = (thermo[self.times,self.Q_cols[self.PEcol]]
+                                                   + (thermo[self.times,self.Q_cols[self.Pcol]]*
+                                                      thermo[self.times,self.Q_cols[self.Vcol]]))**2
                 elif qn == 'Compressibility':
-                    self.Q[:, copy0, 0,0,0, qc] = thermo[:,self.Q_cols[self.Vcol]]**2
+                    self.Q[:, copy0, 0,0,0, qc] = thermo[self.times,self.Q_cols[self.Vcol]]**2
                 elif qn == 'ThermalExpansion':
-                    self.Q[:, copy0, 0,0,0, qc] = (thermo[:,self.Q_cols[self.Vcol]]**2)
+                    self.Q[:, copy0, 0,0,0, qc] = (thermo[self.times,self.Q_cols[self.Vcol]]**2)
                                                    #(thermo[:,self.Q_cols[self.PEcol]]
                                                    # + (thermo[:,self.Q_cols[self.Pcol]]*
                                                    #    thermo[:,self.Q_cols[self.Vcol]])))
@@ -327,13 +319,13 @@ def fluctuation(pre, avg_ofthe_square, avg):
 
 
 
-def fix_arr(Nmax, arr, sample=False):
-    # TODO: sample without requiring start from zero
+def fix_arr(Nmax, arr):
     (Ncurr, col) = np.shape(arr)
 
-    if Ncurr > Nmax:
-        arr = arr[:Nmax,:]
-    elif Ncurr < Nmax:
+    ### Need all the thermo data for sampling
+    #if Ncurr > Nmax:
+    #    arr = arr[:Nmax,:]
+    if Ncurr < Nmax:
         Nblank = Nmax - Ncurr
         arr = np.pad(arr, [(0, Nblank), (0, 0)], 'constant', constant_values=np.nan)
     # else return without modifying

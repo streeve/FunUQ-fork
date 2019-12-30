@@ -20,50 +20,62 @@ class FuncDer(object):
 
     NOT intended to be used directly
     '''
-    def __init__(self, QoI, potential, ensemble='nvt', input_dict=None):
+    def __init__(self, QoI, Potential, **kwargs):
         '''
-        Defaults for base class; to be modified by user through dictionary as needed
+        Defaults for base class
         '''
 
         self.QoI = QoI
-        self.pot = potential 
-        self.ensemble = ensemble
-
-        # Debugging
-        self.showA = True
+        self.pot = Potential 
+        self.ensemble = kwargs.get('ensemble', 'nvt')
 
         # Perturbations
-        self.rdfbins = 2000
-        self.rdffile = "funcder_1_{}.rdf".format(self.rdfbins)
-        self.rmin = self.pot.rmin #0.001
-        self.rmax = self.pot.rmax #6.
-        self.rN = 100
-        self.rlist = np.linspace(self.rmin, self.rmax, self.rN)
-        self.alist = [-0.0008, -0.0004, 0.0004, 0.0008]
+        self.rdfbins = kwargs.get('rdfbins', 2000)
+        self.rdffile = kwargs.get('rdffile', "funcder_1_{}.rdf".format(self.rdfbins))
+
+        # If perturbation position LIST is passed,
+        # use that list and define vars from that
+        if kwargs.get('rlist') is not None: 
+            self.rlist = kwargs.get('rlist')
+            self.rmin = np.min(self.rlist)
+            self.rmax = np.max(self.rlist)
+            self.rN = len(self.rlist)
+        # Or define list based on passed vars, with defaults
+        else:
+            self.rmin = kwargs.get('rmin', self.pot.rmin) #0.001
+            self.rmax = kwargs.get('rmax', self.pot.rmax) #6.
+            self.rN = kwargs.get('rN', 100)
+            self.rlist = np.linspace(self.rmin, self.rmax, self.rN)
+
+        self.alist = kwargs.get('alist', [-0.0008, -0.0004, 0.0004, 0.0008])
         #self.alist = [-0.000375, -0.00075, 0.00075, 0.000375]
-        self.clist = [0.1]
-        self.Ncopies = self.QoI.Ncopies
-        self.copy_start = self.QoI.copy_start
+        self.clist = kwargs.get('clist', [0.1])
+
+        self.Ncopies = kwargs.get('Ncopies', self.QoI.Ncopies)
+        self.copy_start = kwargs.get('copy_start', self.QoI.copy_start)
 
         # Either set with bruteforce subclass or by user
         self.intemplate = None
         self.subtemplate = None
+        self.overwrite = True 
+        self.output = kwargs.get('output', 'verbose')
 
         self.method = 'none'
         self.FDnames = []
 
         # User overrides defaults
+        '''
         if input_dict != None:
             for key, val in input_dict.items():
                 try: 
                     setattr(self, key, val)
                 except:
                     raise KeyError("{} is not a valid input parameter.".format(key))
-
-        self.newshape = (self.QoI.Ntimes*self.Ncopies, len(self.rlist), len(self.alist),
-                         len(self.clist), len(self.QoI.Q_names))
-        self.Qprime = np.zeros([self.QoI.Ntimes, self.Ncopies, len(self.rlist), len(self.alist),
-                         len(self.clist), len(self.QoI.Q_names)])
+        '''
+        #self.newshape = (self.QoI.Ntimes*self.Ncopies, len(self.rlist), len(self.alist),
+        #                 len(self.clist), len(self.QoI.Q_names))
+        #self.Qprime = np.zeros([self.QoI.Ntimes, self.Ncopies, len(self.rlist), len(self.alist),
+        #                 len(self.clist), len(self.QoI.Q_names)])
 
 
     def get_names(self):
@@ -197,14 +209,14 @@ class FuncDer(object):
                 for r0c, r0 in enumerate(self.rlist):
                     Qslope = self.Qperturbed[r0c, :, c0c, qc]
                     #Qlsope = Qslope[~np.isnan(Qslope)]
-                    #print(Qslope, A)
                     self.fit[:, r0c, c0c, qc] = np.linalg.lstsq(A.T, Qslope, rcond=None)[0]
                     self.funcder[r0c, qc] = self.fit[0, r0c, c0c, qc]
 
 
             self.funcder[:,qc] = self.funcder[:,qc]*self.QoI.conversions[qc]
 
-        print("Calculated functional derivatives\n")
+        if self.output == 'verbose':
+            print("Calculated functional derivatives\n")
 
 
 
@@ -254,6 +266,7 @@ class FuncDer_bruteforce(FuncDer):
                     try:
                         os.mkdir(adir)
                     except: pass
+                    copydir = os.path.join(adir, self.QoI.copy_folder + '{}')
 
                     out = '{}_{}_{}_{}'.format(self.pot.potname, r0, a0, c0)
                     potfile = '{}.table'.format(out)
@@ -276,6 +289,7 @@ class FuncDer_bruteforce(FuncDer):
                     #copy_files(self.QoI.initdir, self.rundir)
                     #shutil.copy(potfile, adir)
 
+                    '''
                     for copy in range(self.copy_start, self.copy_start + self.Ncopies):
                         copydir = os.path.join(adir, self.QoI.copy_folder+str(copy))
                         replace_in['SEED'] = str(int(random()*100000))
@@ -289,12 +303,27 @@ class FuncDer_bruteforce(FuncDer):
 
                         submit_lammps(copydir, subfile=self.QoI.subfile, subtxt=subtxt,
                                       infile=self.QoI.infile, intxt=intxt, mode=mode)
+                    '''
+                    if mode == 'nanoHUB_submit':
+                        potpath=potpath
+                        initdir=self.pot.paramdir
+                    else:
+                        potpath = None
+                        initdir = None
+
+                    # Note: shares very few things with QoI 
+                    copy_list = np.arange(self.copy_start, self.Ncopies, dtype='int')
+                    submit_lammps(replace_in, self.QoI.infile, self.intxt, 
+                                  copydir, copy_list, self.overwrite,
+                                  potpath=potpath, initdir=initdir,
+                                  replace_sub=replace_sub, mode=mode)
                     sleep(1)
 
-
-    # Replace with call to extrct_lmp
+                    
+    # FIXME replace with call to extrct_lmp
     def extract_lammps(self):
-        # Find size of first file. This does not need to match QoI
+        # Find size of first file. 
+        # Ntimes does not need to match QoI.Ntimes
         logfile = glob(os.path.join(self.rundir, 'c*', 'r*', 'a*', self.QoI.copy_folder+'*', self.QoI.logfile))[-1]
         Ntimes,Ncol = np.shape(read_thermo(logfile, returnval='thermo'))
 
@@ -329,10 +358,10 @@ class FuncDer_bruteforce(FuncDer):
                             elif qn == 'ThermalExpansion':
                                 Qperturbed[:, copy0, r0c, a0c, c0c, qc] = thermo[:,self.QoI.Q_cols[self.QoI.Vcol]]**2
 
-                print("Extracted thermodynamic data for position {}".format(r0))
+                if self.output == 'verbose':
+                    print("Extracted thermodynamic data for position {}".format(r0))
 
         self.Qperturbed = np.nanmean(Qperturbed, axis=(0,1))
-        #print(self.Qperturbed)
 
         for qc, q in enumerate(self.QoI.Q_names): 
             #if self.Q_thermo[qc]:
@@ -342,7 +371,9 @@ class FuncDer_bruteforce(FuncDer):
             if not self.QoI.Q_thermo[qc]:
                 self.funcder_fluct(q, qc)
             
-            
+
+    # BROKEN due to switching submit_lammps to all copies
+    # FIXME switch from copy_start / Ncopy to copy_list
     def resubmit_lammps(self, mode='PBS', strict=False):
 
         for c0c, c0 in enumerate(self.clist):
@@ -408,7 +439,7 @@ class FuncDer_perturbative(FuncDer):
             #Pprime_avg = np.nanmean(Pprime, axis=(0,1))
 
         # Add unperturbed QoI 
-        Qprime = self.Qprime + self.QoI.Q # eV**2 + eV**2
+        Qprime = self.Qprime + self.QoI.Q 
 
         #print(np.shape(Hprime_avg))
         #print(Hprime_avg[0,0,0], self.QoI.beta*(Hprime-Hprime_avg)[0,0,0])
@@ -451,7 +482,6 @@ class FuncDer_perturb_allatom(FuncDer_perturbative):
         self.get_names()
 
         self.reruntemplate = 'rerun.template'
-        #self.rerunfile = 'in.rerun_gauss'
         self.rerunpath = os.path.join(self.QoI.initdir, self.reruntemplate)
         self.reruntxt = read_file(self.rerunpath)
 
@@ -468,7 +498,8 @@ class FuncDer_perturb_allatom(FuncDer_perturbative):
         except: pass
         
         for copy0, copy in enumerate(range(self.copy_start, self.copy_start + self.Ncopies)):
-            rerundir = os.path.join(self.QoI.rundir, self.QoI.copy_folder+str(copy), 'rerun_gauss/')
+            copy_rerundir = os.path.join(self.QoI.rundir, self.QoI.copy_folder+'{}', 'rerun_gauss/')
+            rerundir = copy_rerundir.format(copy)
             try:
                 os.mkdir(rerundir)
             except: pass
@@ -492,31 +523,35 @@ class FuncDer_perturb_allatom(FuncDer_perturbative):
                         if mode == 'nanoHUB_submit':
                             paircoeff = coeff.replace(self.pot.paramdir, '.')
                             replace_in['RUNDIR'] = '.'
+                            initdir=self.pot.paramdir
                         else:
                             paircoeff = coeff.replace(self.pot.paramdir, self.rerunpotdir)
                             replace_in['RUNDIR'] = self.rerunpotdir
+                            initdir=None
                         replace_in['TABLECOEFF'] = paircoeff
 
-                        reruntxt = replace_template(self.reruntxt, replace_in)
-                        rerunpath = os.path.join(rerundir, inname)
-                        write_file(reruntxt, rerunpath)
-
-                        if 'submit' in mode:
-                            subtxt = self.QoI.submit_paths(reruntxt, potpath=potpath)
-                        else: 
-                            subtxt = ''
+                        copy_list = np.array([copy], dtype='int')
                         # Run one at a time
                         if 'PBS' not in mode:
-                            submit_lammps(rerundir, subtxt=subtxt,
-                                          infile=inname, intxt=reruntxt, mode=mode)
-                            print("Running for perturbation position {}".format(r0))
+                            submit_lammps(replace_in, inname, self.reruntxt,
+                                          copy_rerundir, copy_list, self.overwrite,
+                                          potpath=potpath, initdir=initdir,
+                                          mode=mode)
+
+                            if self.output == 'verbose':
+                                print("Re-ran with Gaussian for perturbation position {}".format(r0))
                             sleep(1)
 
             # Or submit all together
+            # TODO test
             if mode == 'PBS':
                 replace_sub = {'NAME': 'gauss'}
                 subtxt = replace_template(self.rerunsubtxt, replace_sub)
-                submit_lammps(rerundir, subfile=self.QoI.subfile, subtxt=subtxt, mode=mode)
+                submit_lammps(replace_in, self.QoI.infile, self.QoI.intxt,
+                              copydir, copy_list, self.overwrite,
+                              potpath=potpath, initdir=initdir,
+                              replace_sub=replace_sub, mode=mode,
+                              subfile=self.QoI.subfile, subtxt=subtxt)
 
 
     def extract_lammps_gauss(self):
@@ -535,16 +570,20 @@ class FuncDer_perturb_allatom(FuncDer_perturbative):
 
                         for qc, q in enumerate(self.QoI.Q_cols):
                             if self.QoI.Q_thermo[qc]:
-                                self.Qprime[:, copy0, r0c, a0c, c0c, qc] = thermo[:,q]
+                                self.Qprime[:, copy0, r0c, a0c, c0c, qc] = thermo[self.QoI.times[:,c0c],q]
 
-                print("Extracted thermodynamic data for perturbation position {}".format(r0))
+                if self.output == 'verbose':
+                    print("Extracted thermodynamic data for perturbation position {}".format(r0))
+
 
     def prepare_FD(self):
         self.extract_lammps_gauss()
-        print("Extracted perturbation data")
+        if self.output == 'verbose':
+            print("Extracted perturbation data")
 
         self.exp_weighting()
-        print("Calculated exponential weights")
+        if self.output == 'verbose':
+            print("Calculated exponential weights")
 
 
 
@@ -552,12 +591,20 @@ class FuncDer_perturb_allatom(FuncDer_perturbative):
 class FuncDer_perturb_coord(FuncDer_perturbative):
     '''
     Subclass for perturbative FuncDer: using RDF (coordination) to get perturbation contributions
+
+    INPUTS:
+    Required:
+    QoI: FunUQ QoI object with thermodynamic data
+    Potential: FunUQ potential object
     '''
     def __init__(self, *args, **kwargs):
         super(FuncDer_perturb_coord, self).__init__(*args, **kwargs)
         
         self.method = 'perturbative_coord'
         self.get_names()
+
+        self.coord_all = None
+
 
     def get_perturbs(self):
         self.gauss = np.zeros([len(self.rlist), len(self.alist), len(self.clist), self.rdfbins-1])
@@ -572,55 +619,64 @@ class FuncDer_perturb_coord(FuncDer_perturbative):
                                                      np.exp(-(self.rdf_R-r0)**2/(2*c0**2)))[:-1]
 
 
-    def extract_rdf(self, copy):
-        bins = self.rdfbins
+    def extract_rdf(self, copy_return, copy_name): #, copy0, copy):
+
+        # Get all RDF data at once
+        if self.coord_all is None:
+            bins = self.rdfbins
         
-        #for copy0, copy in enumerate(range(self.copy_start, self.copy_start + self.Ncopies)):
-        rdffile = os.path.join(self.QoI.rundir, self.QoI.copy_folder+str(copy), self.rdffile)
+            self.coord_all = np.zeros([self.QoI.Nmax, self.Ncopies, bins-1])
+            for copy0, copy in enumerate(range(self.copy_start, self.copy_start + self.Ncopies)):
+                rdffile = os.path.join(self.QoI.rundir, self.QoI.copy_folder+str(copy), self.rdffile)
         
-        rdf_slice = np.zeros([self.QoI.Ntimes, 2], dtype=int)
-        rdf_slice[:,0] = np.arange(4, self.QoI.Ntimes*(bins+1)+4, bins+1)
-        rdf_slice[:,1] = np.arange(4+bins, self.QoI.Ntimes*(bins+1)+4+bins, bins+1)
-        with open(rdffile) as f:
-            rdf_raw = f.readlines()
+                rdf_slice = np.zeros([self.QoI.Nmax, 2], dtype=int)
+                rdf_slice[:,0] = np.arange(4, self.QoI.Nmax*(bins+1)+4, bins+1)
+                rdf_slice[:,1] = np.arange(4+bins, self.QoI.Nmax*(bins+1)+4+bins, bins+1)
+                with open(rdffile) as f:
+                    rdf_raw = f.readlines()
                 
-        #self.coord = np.zeros([self.Ntimes, self.Ncopies, bins])
-        #self.coord = np.zeros([self.Ntimes, self.Ncopies,1,1,1,bins])
+                #self.coord = np.zeros([self.Ntimes, self.Ncopies, bins])
+                #self.coord = np.zeros([self.Ntimes, self.Ncopies,1,1,1,bins])
 
-        coord = np.zeros([self.QoI.Ntimes, bins-1])
-        #coord = np.full([self.QoI.Ntimes, bins-1], np.nan)
-        #print(np.shape(coord))
-        #for tc, t in enumerate(range(self.Ntimes)):
-        for tc in range(self.QoI.Ntimes):
-            #coord_cum = np.zeros([bins])
+                #self.coord_all = np.zeros([self.QoI.Ntimes, bins-1])
 
-            #try: 
-            coord_cum = np.array(np.array(list(map(methodcaller('split'), rdf_raw[rdf_slice[tc,0]:rdf_slice[tc,1]])), dtype=float)[:,3])
-            coord[tc,:] = (coord_cum[bins-1:0:-1] - coord_cum[bins-2::-1])[::-1]
-            #except IndexError: 
-                #Nblank = self.QoI.Ntimes - tc
-                #coord = fix_arr(self.QoI.Ntimes, coord)
-                #print(np.shape(coord))
-                #coord = np.pad(coord, (Nblank, 0), 'constant', constant_values=np.nan)
-                #break
+                    
+                #coord = np.full([self.QoI.Ntimes, bins-1], np.nan)
+                for tc, t in enumerate(range(self.QoI.Nmax)):
+                #for tc,t in enumerate(self.QoI.times[:,copy0]): #range(self.QoI.Ntimes):
+                    #try: 
+                    coord_cum = np.array(np.array(list(map(methodcaller('split'), rdf_raw[rdf_slice[t,0]:rdf_slice[t,1]])), dtype=float)[:,3])
+                    self.coord_all[tc,copy0,:] = (coord_cum[bins-1:0:-1] - coord_cum[bins-2::-1])[::-1]
 
-            #for c in range(bins-1, 0, -1):
-            #    self.coord[tc, copy0, c] = coord_cum[c] - coord_cum[c-1]
-                #self.coord[tc, copy0, 0,0,0, c] = coord_cum[c] - coord_cum[c-1]
+                    #except IndexError: 
+                        #Nblank = self.QoI.Ntimes - tc
+                        #coord = fix_arr(self.QoI.Ntimes, coord)
+                        #coord = np.pad(coord, (Nblank, 0), 'constant', constant_values=np.nan)
+                        #break
+  
+                    #for c in range(bins-1, 0, -1):
+                        #self.coord[tc, copy0, c] = coord_cum[c] - coord_cum[c-1] 
+                        #self.coord[tc, copy0, 0,0,0, c] = coord_cum[c] - coord_cum[c-1]
 
 
-        print("Extracted RDF data for copy {}".format(copy))
+        # Sample from RDF data one copy at a time
+        coord = self.coord_all[self.QoI.times[:,copy_return],copy_return,:]
+
+        if self.output == 'verbose':
+            print("Extracted RDF data for copy {}".format(copy_name))
         return coord
 
 
     # TODO: wastes time if not PE or P
     def calc_Qprime(self):
+        self.Qprime = np.zeros([self.QoI.Ntimes, self.Ncopies, len(self.rlist), len(self.alist),
+                                len(self.clist), len(self.QoI.Q_names)])
 
         #for qc, q in enumerate(self.Q_names):
         for copy0, copy in enumerate(range(self.copy_start, self.copy_start + self.Ncopies)):
-            coord = self.extract_rdf(copy)
+            coord = self.extract_rdf(copy0, copy)
 
-            for tc in range(self.QoI.Ntimes):
+            for tc,t in enumerate(self.QoI.times[:,copy0]): #range(self.QoI.Ntimes):
                 for r0c, r0 in enumerate(self.rlist):
                     for a0c, a0 in enumerate(self.alist):
                         for c0c, c0 in enumerate(self.clist):
@@ -663,11 +719,15 @@ class FuncDer_perturb_coord(FuncDer_perturbative):
 
     def prepare_FD(self):
         self.get_perturbs()
-        print("Calculated perturbations")
+        if self.output == 'verbose':
+            print("Calculated perturbations")
 
         self.calc_Qprime()
-        print("Calculated perturbation Hamiltonian contributions")
+        if self.output == 'verbose':
+            print("Calculated perturbation Hamiltonian contributions")
+
         self.exp_weighting()
-        print("Calculated exponential weights")
+        if self.output == 'verbose':
+            print("Calculated exponential weights")
 
 

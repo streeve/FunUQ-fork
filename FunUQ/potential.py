@@ -54,6 +54,10 @@ class Potential(object):
 
         if create:
             self.create_table()
+        elif 'eam' in self.potname:
+            R, PE = read_EAMtable(self.potpath)
+            self.R = R
+            self.PE = PE
         else:
             R, PE, key = read_file(self.potpath)
             self.R = R
@@ -210,6 +214,24 @@ def read_file(fname):
 
     return R, PE, key
 
+def read_EAMtable(fname):
+    with open(fname) as f:
+        for x in range(3):
+            txt = f.readline()
+
+    Nrho, drho, Nr, dr, cutoff = list(map(float, txt.split()))
+    Nrho = int(Nrho)
+    Nr = int(Nr)
+
+    data = np.loadtxt(fname, skiprows=3)
+    data = data.flatten()
+
+    # F, Z, rho
+    Z = data[Nrho:Nrho+Nr]
+    R = np.linspace(0, Nr*dr, Nr)
+    PE = Z**2 * 27.2 * 0.529 / R
+
+    return R, PE
                    
 def read_params(fname):
     '''

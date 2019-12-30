@@ -22,7 +22,6 @@ def is_thermo(q):
 
 
 def is_fluct(q):
-    print("WARNING: fluctionation properties still in dev.")
     return q in ['HeatCapacityVol', 'HeatCapacityPress', 'Compressibility', 'ThermalExpansion']
 
 
@@ -56,36 +55,89 @@ def write_file(txt, dest):
         f.write(txt)
 
 
-def submit_lammps(fold, subfile=None, subtxt=None, 
-                  infile=None, intxt=None, 
-                  mode='PBS', resub=False,
-                  cores=1, minutes=30):
+def submit_paths(intxt, initdir, potpath):
+    extra = ''
+    if 'read_data' in intxt:
+        dfile = intxt.split('read_data')[-1].split('\n')[0].split('/')[-1].strip()
+        extra += ' -i '
+        extra += os.path.join(initdir, dfile)
+    #elif 'pair_coeff' in intxt: # Always present
+    extra += ' -i '
+    #if potpath == None:
+    extra += potpath
+        
+    return extra
+
+
+def submit_lammps(replace_in, infile, intxt, 
+                  copy_rundir, copy_list, overwrite,
+                  subfile=None, subtxt=None,
+                  potpath=None, initdir=None, replace_sub={},
+                  mode='PBS', cores=1, minutes=30):
+    '''                                                                        
+    Run LAMMPS simulation given an input file and optional submission details
     '''
-    Submit LAMMPS simulation given a PBS file and input file
-    '''
+    maxcopy = 0
+    if not overwrite:
+        existing = glob(copy_rundir.format('*')) #os.path.join(rundir, copy_folder+'*'))
+        for x in existing:
+            nextcopy = int(x.split(copy_folder)[-1])
+            if nextcopy >= maxcopy:
+                maxcopy = nextcopy +1
+        print(" - NOT overwriting existing - creating new folders")
+    else:
+        if 'rerun_gauss' not in copy_rundir:
+            print(" - Overwriting existing runs")
 
-    codedir = os.getcwd()
-    try:
-        os.mkdir(fold)
-    except:
-        if 'rerun_gauss' not in fold:
-            print("{} is being overwritten".format(fold))
+    ### Doesn't really make sense for copy_start to supercede overwrite=False
+    #if copy_start > 0 or maxcopy < copy_start:
+    #    maxcopy = copy_start
+    copy_list += maxcopy 
 
-    os.chdir(fold)
-    if not resub:
-        write_file(intxt, infile)
+    for copy in copy_list:
+    #for copy in range(maxcopy, maxcopy+Ncopies):
+        #copydir = os.path.join(rundir, copy_folder+str(copy))
+        copydir = copy_rundir.format(copy)
+        try:
+            os.mkdir(rerundir)
+        except: pass
 
-    if mode == 'PBS':
-        PBS_submit(subfile, subtxt)
-    elif mode == 'nanoHUB_submit':
-        nanoHUB_submit(infile, subtxt, 
-                       cores, minutes)
-    elif mode == 'nanoHUB_local':
-        nanoHUB_local(infile)
-    elif mode == 'nanoHUB_local_wait':
-        nanoHUB_local_wait(infile)
+        replace_in['SEED'] = str(int(random()*100000))
+        intxt_replaced = replace_template(intxt, replace_in)
+        if 'PBS' in mode:
+            replace_sub['NAME'] += '_{}'.format(copy)
+            subtxt = replace_template(subtxt, replace_sub)
+        elif 'submit' in mode:
+            subtxt = submit_paths(intxt_replaced, initdir, potpath)
+        else:
+            subtxt = ''
+        #submit_lammps(cdir, infile, intxt, 
+        #              subfile=subfile, subtxt=subtxt, mode=mode)
 
-    os.chdir(codedir)
+        codedir = os.getcwd()
+        try:
+            os.mkdir(copydir)
+            print("Creating {}".format(copydir))
+        except:
+            if 'rerun_gauss' not in copydir:
+                print("{} is being overwritten".format(copydir))
+
+        os.chdir(copydir)
+        write_file(intxt_replaced, infile)
+        
+        if mode == 'PBS':
+            PBS_submit(subfile, subtxt)
+        elif mode == 'nanoHUB_submit':
+            nanoHUB_submit(infile, subtxt, 
+                           cores, minutes)
+        elif mode == 'nanoHUB_local':
+            nanoHUB_local(infile)
+        elif mode == 'nanoHUB_local_wait':
+            nanoHUB_local_wait(infile)
+
+        os.chdir(codedir)
+        
+    return
 
 
 def PBS_submit(subfile, subtxt):
@@ -97,6 +149,7 @@ def PBS_submit(subfile, subtxt):
 def nanoHUB_submit(infile, subtxt,
                    cores, minutes):
     # Here, subtxt is extra file args
+    print(subtxt)
     command = ("submit -n {} -w {} {} "
                    "lammps-09Dec14-parallel -i {}".format(cores, minutes,
                                                           subtxt, infile))
